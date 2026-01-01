@@ -20,6 +20,7 @@ of a MicroPython device (e.g. `/flash` on Raspberry Pi Pico-class boards).
 
 No `pip`, no `sys.path` modification, no deep directory trees.
 
+```text
 PocketMicroLIB/
 ├─ README.md
 ├─ LICENSE
