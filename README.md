@@ -26,7 +26,7 @@ PocketMicroLIB/
 ├─ LICENSE
 ├─ src/
    └─ micro_logger.py
-   ├─ micro_state.py
+   ├─ state.py
    ├─ micro_storage.py
    ├─ micro_modem.py
    ├─ micro_http_client.py
