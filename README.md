@@ -19,3 +19,14 @@ All modules are intended to be copied directly into the root directory
 of a MicroPython device (e.g. `/flash` on Raspberry Pi Pico-class boards).
 
 No `pip`, no `sys.path` modification, no deep directory trees.
+
+PocketMicroLIB/
+├─ README.md
+├─ LICENSE
+├─ src/
+   └─ micro_logger.py
+   ├─ micro_state.py
+   ├─ micro_storage.py
+   ├─ micro_modem.py
+   ├─ micro_http_client.py
+   ├─ micro_socket_client.py
