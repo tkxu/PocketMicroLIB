@@ -24,10 +24,16 @@ No `pip`, no `sys.path` modification, no deep directory trees.
 PocketMicroLIB/
 ├─ README.md
 ├─ LICENSE
-├─ src/
-   └─ micro_logger.py
-   ├─ state.py
-   ├─ micro_storage.py
-   ├─ micro_modem.py
-   ├─ micro_http_client.py
-   ├─ micro_socket_client.py
+├─ README.md
+└─ src/
+   ├─ micro_http_client.py       # Lightweight HTTP client for MicroPython
+   ├─ micro_logger.py            # Simple logging utilities
+   ├─ micro_modem.py             # Generic modem base class
+   ├─ micro_socket.py            # Socket abstraction layer
+   ├─ micro_storage_manager.py   # File and storage management utilities
+   ├─ micro_unzip.py             # Minimal unzip utility for MicroPython
+   ├─ micro_zip.py               # Minimal zip utility for MicroPython
+   ├─ sdcard.py                  # SD card driver (SPI-based)
+   ├─ soracom_harvest_files.py   # SORACOM Harvest Files client
+   ├─ state.py                   # Simple state management utilities
+   └─ ublox_sara_r.py             # u-blox F9P GNSS + SARA-R modem integration
