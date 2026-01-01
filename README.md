@@ -8,6 +8,11 @@ Simply copy the .py files to the root of the device.
 - Files prefixed with `micro_` are generic infrastructure modules.
 - Files without the prefix are device-specific implementations.
 
+## License
+
+This project is released under the **MIT License**.  
+See the `LICENSE` file in the repository for details.
+
 ## Design Philosophy
 
 - **No Python packages**
