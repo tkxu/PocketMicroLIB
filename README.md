@@ -7,3 +7,15 @@ Simply copy the .py files to the root of the device.
 
 - Files prefixed with `micro_` are generic infrastructure modules.
 - Files without the prefix are device-specific implementations.
+
+## Design Philosophy
+
+- **No Python packages**
+- **Flat file structure**
+- **Optimized for MicroPython**
+- **Designed for actual hardware operation**
+
+All modules are intended to be copied directly into the root directory
+of a MicroPython device (e.g. `/flash` on Raspberry Pi Pico-class boards).
+
+No `pip`, no `sys.path` modification, no deep directory trees.
