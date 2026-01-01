@@ -1,5 +1,5 @@
 # PocketMicroLIB
-PocketMicroLIB – Practical MicroPython libraries for GNSS &amp; LTE IoT devices
+PocketMicroLIB – Practical MicroPython libraries for LTE IoT devices using GNSS.
 
 This library is designed primarily for MicroPython on Raspberry Pi Pico-class boards.
 No Python package installation is required.
