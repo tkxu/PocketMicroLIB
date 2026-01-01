@@ -20,6 +20,49 @@ of a MicroPython device (e.g. `/flash` on Raspberry Pi Pico-class boards).
 
 No `pip`, no `sys.path` modification, no deep directory trees.
 
+### Core Infrastructure Modules (`micro_*`)
+
+- `micro_logger.py`  
+  Simple and lightweight logging utilities designed for MicroPython environments.
+
+- `micro_state.py`  
+  Basic state and flag management helpers for embedded applications.
+
+- `micro_storage_manager.py`  
+  Utilities for file handling, log rotation, and persistent storage management.
+
+- `micro_modem.py`  
+  Generic base class for cellular modems, providing common AT command handling.
+
+- `micro_socket.py`  
+  Socket abstraction layer that hides modem-specific socket implementations.
+
+- `micro_http_client.py`  
+  Minimal HTTP client built on top of `micro_socket`, optimized for low-memory devices.
+
+- `micro_zip.py`  
+  Minimal ZIP creation utility suitable for MicroPython.
+
+- `micro_unzip.py`  
+  Minimal ZIP extraction utility for MicroPython environments.
+
+---
+
+### Hardware / Service Specific Modules
+
+- `sdcard.py`  
+  SPI-based SD card driver for MicroPython.
+
+- `soracom_harvest_files.py`  
+  Client implementation for SORACOM Harvest Files service.
+
+- `ublox_sara_r.py`  
+  Integrated driver for u-blox F9P GNSS receiver and SARA-R cellular modem.
+
+- `state.py`  
+  Lightweight state management helpers used by application logic.
+
+
 ```text
 PocketMicroLIB/
 ├─ README.md
