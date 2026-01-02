@@ -43,7 +43,7 @@ No `pip`, no `sys.path` modification, no deep directory trees.
   Socket abstraction layer that hides modem-specific socket implementations.
 
 - `micro_http_client.py`  
-  Minimal HTTP client built on top of `micro_socket`, optimized for low-memory devices.
+  Minimal HTTP client built optimized for low-memory devices.
 
 - `micro_zip.py`  
   Minimal ZIP creation utility for MicroPython environments.
