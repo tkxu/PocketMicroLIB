@@ -46,7 +46,7 @@ No `pip`, no `sys.path` modification, no deep directory trees.
   Minimal HTTP client built on top of `micro_socket`, optimized for low-memory devices.
 
 - `micro_zip.py`  
-  Minimal ZIP creation utility suitable for MicroPython.
+  Minimal ZIP creation utility for MicroPython environments.
 
 - `micro_unzip.py`  
   Minimal ZIP extraction utility for MicroPython environments.
