@@ -8,15 +8,14 @@ Author      : https://github.com/tkxu/
 MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
-
+              Rev. 0.91  2026-01-04
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
 """
 #micro_modem.py
 import utime
 from machine import UART, Pin
-import state
-from micro_logger import log_status, LEVEL_DEBUG2, LEVEL_DEBUG, LEVEL_INFO, LEVEL_WARN, LEVEL_ERROR
+from micro_logger import log_status, debug_level, LEVEL_DEBUG3, LEVEL_DEBUG2, LEVEL_DEBUG, LEVEL_INFO, LEVEL_WARN, LEVEL_ERROR
 
 
 class MicroModem:
@@ -33,9 +32,9 @@ class MicroModem:
         self.last_response = b""
         self.rxdata = b""
         if debug:
-            state.debug_level = LEVEL_DEBUG
+            debug_level = LEVEL_DEBUG
         else:
-            state.debug_level = LEVEL_INFO
+            debug_level = LEVEL_INFO
         
         # Basic modem information
         self.modem_model = "Generic"
@@ -64,7 +63,7 @@ class MicroModem:
         """Send an AT command and wait for response."""
         cmd_bytes = cmd.encode() if isinstance(cmd, str) else cmd
         self._write(cmd_bytes + b"\r\n")
-        log_status(f"[SEND] {cmd_bytes.decode()}", level=LEVEL_DEBUG2)
+        log_status(f"[SEND] {cmd_bytes.decode()}", level=LEVEL_DEBUG3)
 
         if async_mode:
             return True
@@ -87,7 +86,7 @@ class MicroModem:
                 return prompt_resp if return_raw else True
 
             self._write(data_after_prompt)
-            log_status(f"[SEND-DATA] {len(data_after_prompt)} bytes", level=LEVEL_DEBUG2)
+            log_status(f"[SEND-DATA] {len(data_after_prompt)} bytes", level=LEVEL_DEBUG3)
 
         # Wait for OK
         final_resp = self.wait_response(
@@ -96,7 +95,7 @@ class MicroModem:
             return_full=True
         )
         
-        log_status(f"[RECV] {final_resp}", level=LEVEL_DEBUG)
+        log_status(f"[RECV] {final_resp}", level=LEVEL_DEBUG2)
 
         if final_resp is None or b"ERROR" in final_resp:
             return final_resp if return_raw else False

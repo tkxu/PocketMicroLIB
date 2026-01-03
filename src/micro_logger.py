@@ -5,14 +5,13 @@ Author      : https://github.com/tkxu/
 MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
-
+              Rev. 0.91  2026-01-04
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
 """
 # micro_logger.py
 
 import utime
-import state
 
 LEVEL_DEBUG3 = 0
 LEVEL_DEBUG2 = 1
@@ -22,9 +21,10 @@ LEVEL_WARN = 4
 LEVEL_ERROR = 5
 LEVEL_CRIT = 6
 
+debug_level = LEVEL_DEBUG
 
 def log_status(msg, level=LEVEL_INFO):
-    if level >= state.debug_level:
+    if level >= debug_level:
         if level == LEVEL_DEBUG:
             prefix = "[DEBUG]"
         elif level == LEVEL_DEBUG2:
