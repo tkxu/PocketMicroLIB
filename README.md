@@ -54,7 +54,10 @@ No `pip`, no `sys.path` modification, no deep directory trees.
 ---
 
 ### Hardware / Service Specific Modules
-
+- `boot.py`  
+  
+- `board_rpi_pico2.py`  
+  
 - `sdcard.py`  
   SPI-based SD card driver for MicroPython.
 
@@ -63,9 +66,6 @@ No `pip`, no `sys.path` modification, no deep directory trees.
 
 - `ublox_sara_r.py`  
   Integrated driver for u-blox F9P GNSS receiver and SARA-R cellular modem.
-
-- `state.py`  
-  Lightweight state management helpers used by application logic.
 
 
 ```text
