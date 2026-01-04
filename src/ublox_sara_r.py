@@ -7,7 +7,7 @@ Author      : https://github.com/tkxu/
 MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
-
+              Rev. 0.91  2026-01-04
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
 """
@@ -126,8 +126,17 @@ class SaraR(MicroModem):
                     full_year = 2000 + year_short
 
                     
+                    # --- UTC -> JST conversion for SARA-R410 ---
                     if self.modem_model == "R410":
-                        hour = (hour + 9) % 24  # JST +9 for SARA-R410
+                        epoch = utime.mktime(
+                            (full_year, month, day, hour, minute, second, 0, 0)
+                        )
+                        epoch += 9 * 3600
+                        full_year, month, day, hour, minute, second, weekday, _ = utime.localtime(epoch)
+                    else:
+                        weekday = utime.localtime(
+                            (full_year, month, day, hour, minute, second, 0, 0)
+                        )[6]
 
                     rtc.datetime((full_year, month, day, 0, hour, minute, second, 0))
 
@@ -468,13 +477,13 @@ class SaraR(MicroModem):
 
                 if sent == 0:
                     retries += 1
-                    log_status("[SARA] USOWR sent=0, retry after 100ms", LEVEL_DEBUG)
+                    log_status("[SARA] USOWR: sent=0, retry after 100ms", LEVEL_DEBUG)
                     utime.sleep_ms(100)
                     continue
 
                 # partial send
                 if sent < len(mv[total:]):
-                    log_status(f"[SARA] USOWR partial send {sent}/{len(mv[total:])}, wait 1000ms", LEVEL_DEBUG)
+                    log_status(f"[SARA] USOWR: partial send {sent}/{len(mv[total:])}, wait 1000ms", LEVEL_DEBUG2)
                     utime.sleep_ms(1000)
 
                 total += sent
@@ -513,7 +522,7 @@ class SaraR(MicroModem):
 
         if sent != length:
             log_status(
-                f"[SARA] USOWR partial send: requested={length}, sent={sent}",
+                f"[SARA] USOWR: partial send: requested={length}, sent={sent}",
                 LEVEL_WARN,
             )
 
@@ -521,21 +530,29 @@ class SaraR(MicroModem):
 
     def socket_recv(self, sock_num: int, size: int = 512) -> bytes:
         """
-        Receive data from socket.
-        Wait for +UUSORD URC if no pending data exists.
+        Receive data from socket using +UUSORD URC.
+        Returns bytes received, may be empty if no data.
+        Handles multiple URC in last_response safely.
         """
-        log_status(f"[SOCK] socket_recv: {self.last_response}", level=LEVEL_DEBUG)
+        if self._rx_buffer:
+            data = self._rx_buffer[:size]
+            self._rx_buffer = self._rx_buffer[size:]
+            return bytes(data)
 
-        if self.wait_response("+UUSORD:", timeout=3000):
-            
-            resp = self.last_response
-            ok_received, uusocl_received = self._handle_uusord(resp)
-            if ok_received == True:
-                data = self._rx_buffer
-                self._rx_buffer = b""
-                return bytes(data)
+        if not self.wait_response("+UUSORD:", timeout=3000):
+            # Timeout
+            return b""
 
-        return b""    
+        resp = self.last_response
+        ok_received, uusocl_received = self._handle_uusord(resp, sock_num_expected=sock_num)
+
+        if ok_received:
+            data = self._rx_buffer[:size]
+            self._rx_buffer = self._rx_buffer[size:]
+            return bytes(data)
+
+        return b""
+
     
     
     def _parse_usowr_len(self, resp: bytes) -> int:
@@ -554,59 +571,59 @@ class SaraR(MicroModem):
 
         return sent if sent is not None else -1
 
-    def _handle_uusord(self, decoded: bytes):
+    def _handle_uusord(self, decoded: bytes, sock_num_expected: int = None):
         """
-        Handle +UUSORD URC and issue corresponding AT+USORD command.
+        Handle +UUSORD URC and issue AT+USORD command.
 
         decoded: bytes containing UART-received data including +UUSORD
-        Return:
-            ok_received (bool): True if USORD returned OK
-            uusocl_received (bool): True if +UUSOCL was detected in response
+        sock_num_expected: optional, restrict to a specific socket number
+        Returns:
+            ok_received (bool)
+            uusocl_received (bool)
         """
         ok_received = False
         uusocl_received = False
 
-        sock_num = None
-        length = 512  # fallback
+        log_status(f"[SARA] _handle_uusord: {decoded}", level=LEVEL_DEBUG)
 
-        log_status(f"[SOCK] _handle_uusord: {decoded}", level=LEVEL_DEBUG)
-
-        # --- parse +UUSORD ---
         for line in decoded.split(b"\r\n"):
+            line = line.strip()
+            if not line:
+                continue
+
             if line.startswith(b"+UUSORD:"):
                 try:
                     parts = line.split(b":", 1)[1].split(b",")
                     sock_num = int(parts[0])
                     length = int(parts[1])
-                except Exception:
-                    pass
-                break
 
-        if sock_num is None:
-            return ok_received, uusocl_received
+                    if sock_num_expected is not None and sock_num != sock_num_expected:
+                        continue
 
-        # --- issue USORD ---
-        cmd = f"AT+USORD={sock_num},{length}\r"
-        if not self.send_at(cmd):
-            return ok_received, uusocl_received
+                    cmd = f"AT+USORD={sock_num},{length}\r"
+                    if not self.send_at(cmd):
+                        log_status("[SARA] send_at failed for USORD", LEVEL_WARN)
+                        continue
 
-        resp = self.last_response
-        #log_status(f"[SOCK] resp: {resp}", level=LEVEL_DEBUG)
+                    resp = self.last_response
+                    payload = self.extract_usord_data(resp)
+                    if payload:
+                        self._rx_buffer.extend(payload)
 
-        # --- parse USORD response ---
-        payload = self.extract_usord_data(resp)
-        if payload:
-            self._rx_buffer.extend(payload)
+                    for resp_line in resp.split(b"\r\n"):
+                        resp_line = resp_line.strip()
+                        if resp_line == b"OK":
+                            ok_received = True
+                        elif resp_line.startswith(b"+UUSOCL:"):
+                            uusocl_received = True
 
-        for line in resp.split(b"\r\n"):
-            if line == b"OK":
-                ok_received = True
-            elif line.startswith(b"+UUSOCL:"):
-                uusocl_received = True
+                except Exception as e:
+                    log_status(f"[SARA] _handle_uusord parse error: {e}", LEVEL_WARN)
+                    continue
 
         log_status(f"[SARA] _rx_buffer: {self._rx_buffer}", level=LEVEL_DEBUG2)
-
         return ok_received, uusocl_received
+
 
     def extract_usord_data(self, resp: bytes) -> bytes | None:
         """
@@ -660,6 +677,7 @@ class SaraR(MicroModem):
 if __name__ == "__main__":
     from micro_socket import MicroSocket
     from micro_http_client import MicroHttpClient
+    import os
     
     log_status("=== SARA-R410/R510 LTE modules TEST START ===", LEVEL_INFO)
     
