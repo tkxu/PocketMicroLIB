@@ -7,11 +7,10 @@ Author      : https://github.com/tkxu/
 MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
-
+              Rev. 0.91  2026-01-04
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
 """
-
 # micro_storage_manager.py
 from machine import Pin, SPI
 import os
@@ -65,11 +64,11 @@ class MicroStorageManager:
                 self._ensure_dir(self.mount_path)
                 self._ensure_dir(self.log_path)
                 self.mounted = True
-                log_status(f"SD mounted: {pins}", LEVEL_INFO)
+                log_status(f"[STMG] SD mounted: {pins}", LEVEL_INFO)
                 return True
             except Exception as e:
-                log_status(f"SD mount failed {pins}: {e}", LEVEL_WARN)
-        log_status("SD mount failed: no valid SPI configuration", LEVEL_ERROR)
+                log_status(f"[STMG] SD mount failed {pins}: {e}", LEVEL_WARN)
+        log_status("[STMG] SD mount failed: no valid SPI configuration", LEVEL_ERROR)
         return False
 
     def unmount(self) -> bool:
@@ -80,10 +79,10 @@ class MicroStorageManager:
             with self._lock:
                 os.umount(self.mount_path)
                 self.mounted = False
-            log_status("SD unmounted", LEVEL_INFO)
+            log_status("[STMG] SD unmounted", LEVEL_INFO)
             return True
         except Exception as e:
-            log_status(f"SD unmount failed: {e}", LEVEL_ERROR)
+            log_status(f"[STMG] SD unmount failed: {e}", LEVEL_ERROR)
             return False
 
     def file_exists(self, path: str) -> bool:
@@ -111,7 +110,7 @@ class MicroStorageManager:
     def append_file(self, path: str, data) -> int:
         """Append data to a file. Returns bytes written."""
         if not self.mounted:
-            log_status("append_file: SD not mounted", LEVEL_ERROR)
+            log_status("[STMG] append_file: SD not mounted", LEVEL_ERROR)
             return 0
         try:
             with self._lock:
@@ -120,7 +119,7 @@ class MicroStorageManager:
                     written = f.write(data)
             return written if written else 0
         except Exception as e:
-            log_status(f"append_file failed {path}: {e}", LEVEL_ERROR)
+            log_status(f"[STMG] append_file failed {path}: {e}", LEVEL_ERROR)
             return 0
 
     def rotate(self, new_filename="new.log") -> str | None:
@@ -128,20 +127,20 @@ class MicroStorageManager:
         if not self.mounted:
             return None
         if not self.file_exists(self.temp_file):
-            log_status(f"rotate_temp: {self.temp_file} not found", LEVEL_WARN)
+            log_status(f"[STMG] rotate_temp: {self.temp_file} not found", LEVEL_WARN)
             return None
         dst = f"{self.log_path}/{new_filename}"
-        log_status(f"Renaming {self.temp_file} -> {dst}", LEVEL_DEBUG)
+        log_status(f"[STMG] Renaming {self.temp_file} -> {dst}", LEVEL_DEBUG2)
         try:
             with self._lock:
                 self._ensure_dir(self.log_path)
                 utime.sleep_ms(20)
                 os.rename(self.temp_file, dst)
                 utime.sleep_ms(20)
-            log_status(f"Rotated temp file {self.temp_file} -> {dst}", LEVEL_INFO)
+            log_status(f"[STMG] Rotated temp file {self.temp_file} -> {dst}", LEVEL_INFO)
             return dst
         except Exception as e:
-            log_status(f"rotate_temp failed: {e}", LEVEL_ERROR)
+            log_status(f"[STMG] rotate_temp failed: {e}", LEVEL_ERROR)
             return None
 
     def list_dir(self, path=None):
@@ -150,7 +149,7 @@ class MicroStorageManager:
         try:
             return os.listdir(path)
         except Exception as e:
-            log_status(f"list_dir failed {path}: {e}", LEVEL_ERROR)
+            log_status(f"[STMG] list_dir failed {path}: {e}", LEVEL_ERROR)
             return []
 
     def get_dir_size(self, path: str) -> int:
@@ -171,7 +170,7 @@ class MicroStorageManager:
         size = self.get_dir_size(path)
         if size <= max_bytes:
             return True
-        log_status(f"cleanup_dir: size exceeded {size} > {max_bytes}", LEVEL_WARN)
+        log_status(f"[STMG] cleanup_dir: size exceeded {size} > {max_bytes}", LEVEL_WARN)
         try:
             with self._lock:
                 for name in os.listdir(path):
@@ -199,7 +198,7 @@ class MicroStorageManager:
         try:
             os.stat(path)
         except Exception as e:
-            print(f"Error: Path '{path}' does not exist. {e}")
+            print(f"[STMG] Error: Path '{path}' does not exist. {e}")
             return
         try:
             for name in os.listdir(path):
