@@ -74,6 +74,8 @@ PocketMicroLIB/
 ├─ LICENSE
 ├─ README.md
 └─ src/
+   ├─ board_rpi_pico2.py        
+   ├─ boot.py       
    ├─ micro_http_client.py       # Lightweight HTTP client for MicroPython
    ├─ micro_logger.py            # Simple logging utilities
    ├─ micro_modem.py             # Generic modem base class
@@ -83,5 +85,4 @@ PocketMicroLIB/
    ├─ micro_zip.py               # Minimal zip utility for MicroPython
    ├─ sdcard.py                  # SD card driver (SPI-based)
    ├─ soracom_harvest_files.py   # SORACOM Harvest Files client
-   ├─ state.py                   # Simple state management utilities
    └─ ublox_sara_r.py             # u-blox F9P GNSS + SARA-R modem integration
