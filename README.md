@@ -67,7 +67,7 @@ No `pip`, no `sys.path` modification, no deep directory trees.
   Client implementation for SORACOM Harvest Files service.
 
 - `ublox_sara_r.py`  
-  Integrated driver for u-blox F9P GNSS receiver and SARA-R cellular modem.
+  Integrated driver for u-blox SARA-R cellular modem.
 
 
 ```text
