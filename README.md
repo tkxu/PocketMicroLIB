@@ -57,6 +57,8 @@ No `pip`, no `sys.path` modification, no deep directory trees.
 - `boot.py`  
   
 - `board_rpi_pico2.py`  
+  Board-specific initialization and utilities for Raspberry Pi Pico 2 (RP2040).
+  Handles SD card mounting, pin mapping, GPIO/ADC setup, power control, and board-level helper functions.
   
 - `sdcard.py`  
   SPI-based SD card driver for MicroPython.
