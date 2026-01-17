@@ -7,7 +7,7 @@ Author      : https://github.com/tkxu/
 MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
-              Rev. 0.91  2026-01-04
+              Rev. 0.93  2026-01-17
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
 """
@@ -90,67 +90,86 @@ class SaraR(MicroModem):
         return False
 
 
+    def get_time(self):
+
+        if not self.send_at(b'AT+CCLK?', timeout=3000):
+            log_status("[SARA] get_time read failed", level=LEVEL_ERROR)
+            utime.sleep(1)
+            return None
+
+        for line in self.last_response.split(b"\r\n"):
+            s = line.decode().strip()
+
+            if not s.startswith("+CCLK:"):
+                continue
+
+            start = s.find('"')
+            end = s.find('"', start + 1)
+            if start < 0 or end < 0:
+                continue
+
+            cclk = s[start + 1:end]
+            date_part, time_part = cclk.split(",")
+
+            year_short, month, day = map(int, date_part.split("/"))
+            time_part = time_part.split("+")[0]
+            hour, minute, second = map(int, time_part.split(":"))
+
+            full_year = 2000 + year_short
+            # R410 は JST +9 補正が必要
+            if self.modem_model == "R410":
+                hour = (hour + 9) % 24
+
+            return (full_year, month, day, hour, minute, second)
+
+        log_status("[SARA] get_time failed: +CCLK not found", level=LEVEL_WARN)
+        return None
+
+
     def init_rtc(self, max_retries=5) -> bool:
-        """Initialize RTC from modem time. Returns True on success."""
+
         rtc = RTC()
-        current_year = utime.localtime()[0]
 
         for attempt in range(max_retries):
 
-            if not self.send_at(b'AT+CCLK?', timeout=3000):
-                log_status("[SARA] RTC read failed: retrying...", level=LEVEL_ERROR)
-                utime.sleep(1)
+            dt = self.get_time()
+            if not dt:
+                log_status(
+                    f"[SARA] get_time failed ({attempt+1}/{max_retries})",
+                    LEVEL_WARN
+                )
+                utime.sleep(2)
                 continue
 
-            lines = self.last_response.split(b"\r\n")
+            full_year, month, day, hour, minute, second = dt
 
             try:
-                for line in lines:
-                    s = line.strip().decode()
+                # --- normalize via mktime ---
+                epoch = utime.mktime(
+                    (full_year, month, day, hour, minute, second, 0, 0)
+                )
+                y, m, d, h, mi, s, w, _ = utime.localtime(epoch)
 
-                    if "+CCLK:" not in s:
-                        continue
+                rtc.datetime((y, m, d, w, h, mi, s, 0))
+                self.rtc_initialized = True
 
-                    start = s.find('"')
-                    end = s.find('"', start + 1)
-                    if start < 0 or end < 0:
-                        continue
-
-                    cclk = s[start+1:end]
-                    date_part, time_part = cclk.split(",")
-
-                    year_short, month, day = map(int, date_part.split("/"))
-                    time_part = time_part.split("+")[0]
-                    hour, minute, second = map(int, time_part.split(":"))
-
-                    full_year = 2000 + year_short
-
-                    
-                    # --- UTC -> JST conversion for SARA-R410 ---
-                    if self.modem_model == "R410":
-                        epoch = utime.mktime(
-                            (full_year, month, day, hour, minute, second, 0, 0)
-                        )
-                        epoch += 9 * 3600
-                        full_year, month, day, hour, minute, second, weekday, _ = utime.localtime(epoch)
-                    else:
-                        weekday = utime.localtime(
-                            (full_year, month, day, hour, minute, second, 0, 0)
-                        )[6]
-
-                    rtc.datetime((full_year, month, day, 0, hour, minute, second, 0))
-
-                    log_status(f"[SARA] RTC initialized: {cclk}", level=LEVEL_INFO)
-                    self.rtc_initialized = True
-                    return True
+                log_status(
+                    f"[SARA] initialized: {y:04}-{m:02}-{d:02} "
+                    f"{h:02}:{mi:02}:{s:02}",
+                    LEVEL_INFO
+                )
+                return True
 
             except Exception as e:
-                log_status(f"[SARA] RTC parse failed: {e}", level=LEVEL_ERROR)
+                log_status(
+                    f"[SARA] init failed ({attempt+1}/{max_retries}): {e}",
+                    LEVEL_WARN
+                )
+                utime.sleep(2)
 
-            utime.sleep(2)
-
-        log_status("[SARA] RTC initialization failed.", level=LEVEL_ERROR)
+        log_status("[SARA] initialization failed.", LEVEL_ERROR)
         return False
+
 
     def detected_model(self) -> bool:
         """Detect modem model via ATI command. Returns True if detected."""
@@ -421,7 +440,7 @@ class SaraR(MicroModem):
 
     def socket_create(self) -> int:
         if not self.send_at(b"AT+USOCR=6", timeout=5000):
-            log_status("[SARA] USOCR failed", LEVEL_ERROR)
+            log_status(f"[SARA] USOCR failed: last_response = {self.last_response}", LEVEL_ERROR)
             return -1
         return self._parse_socket_id(self.last_response)
 
@@ -441,18 +460,58 @@ class SaraR(MicroModem):
                 except Exception as e:
                     log_status(f"[SARA] Failed to parse socket_num: {e}" + line)
                     pass
+        log_status(f"[SARA] _parse_socket_id failed: last_response = {self.last_response}", LEVEL_ERROR)
         return -1
 
     def socket_connect(self, sock_num, host, port) -> bool:
         cmd = f'AT+USOCO={sock_num},"{host}",{port}\r'.encode()
         if not self.send_at(cmd, timeout=15000):
-            log_status("[SARA] USOCO failed", LEVEL_ERROR)
+            log_status(f"[SARA] USOCO failed: last_response = {self.last_response}", LEVEL_ERROR)
             self.socket_close(sock_num)
             return False
 
         self.sock_num = sock_num
         log_status(f"[SARA] Socket connected: {sock_num}", LEVEL_INFO)
         return True
+
+    def socket_connect_step(self, sock_num, host, port) -> bool | None:
+        now = utime.ticks_ms()
+
+        if self.socket_state == "idle":
+            cmd = f'AT+USOCO={sock_num},"{host}",{port}\r'.encode()
+            self.send_at(cmd, async_mode=True)
+            self.socket_state = "usoco_wait"
+            self.socket_start = now
+            return None
+
+        elif self.socket_state == "usoco_wait":
+            if self.wait_response_async("OK"):
+                self.sock_num = sock_num
+                self.socket_state = "done"
+                log_status(f"[SARA] Socket connected: {sock_num}", LEVEL_INFO)
+                return True
+
+            # +UUSOCL が先に来た場合
+            if b"+UUSOCL" in self.last_response:
+                log_status(
+                    f"[SARA] USOCO failed: socket closed early {self.last_response}",
+                    LEVEL_ERROR
+                )
+                self.socket_close(sock_num)
+                self.socket_state = "idle"
+                return False
+
+            if utime.ticks_diff(now, self.socket_start) > 15000:
+                log_status(
+                    f"[SARA] USOCO timeout: last_response={self.last_response}",
+                    LEVEL_ERROR
+                )
+                self.socket_close(sock_num)
+                self.socket_state = "idle"
+                return False
+
+            return None
+
 
     def socket_send(self, data: bytes) -> int:
         if self.sock_num < 0:
@@ -699,6 +758,7 @@ if __name__ == "__main__":
             raise SystemExit
         utime.sleep_ms(10)
 
+    modem.init_rtc()
     socket = MicroSocket(modem)
     http_client = MicroHttpClient(socket)
 
