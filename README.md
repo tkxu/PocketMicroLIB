@@ -30,9 +30,6 @@ No `pip`, no `sys.path` modification, no deep directory trees.
 - `micro_logger.py`  
   Simple and lightweight logging utilities designed for MicroPython environments.
 
-- `micro_state.py`  
-  Basic state and flag management helpers for embedded applications.
-
 - `micro_storage_manager.py`  
   Utilities for file handling, log rotation, and persistent storage management.
 
@@ -73,8 +70,7 @@ No `pip`, no `sys.path` modification, no deep directory trees.
 ```text
 PocketMicroLIB/
 ├─ README.md
-├─ LICENSE
-├─ README.md
+├─ LICENSE.md
 └─ src/
    ├─ board_rpi_pico2.py        
    ├─ boot.py       
