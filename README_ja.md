@@ -24,39 +24,37 @@ PocketMicroLIB は、Raspberry Pi Pico などの組込みマイクロコント�
 モジュール概要
 共通インフラモジュール
 
-micro_logger.py
+- `micro_logger.py`  
 MicroPython 向けのシンプルなログ出力ユーティリティ
 
-micro_modem.py
+- `micro_modem.py`
 AT コマンドベースのセルラーモデム用汎用ベースクラス
 
-micro_socket.py
+- `micro_socket.py`
 モデム依存部分を抽象化したソケットレイヤー
 
-micro_http_client.py
+- `micro_http_client.py`
 ソケットレイヤー上に構築した軽量 HTTP クライアント
 
-micro_storage_manager.py
+- `micro_storage_manager.py`
 ファイル操作やログ管理などのストレージユーティリティ
 
-micro_zip.py / micro_unzip.py
+- `micro_zip.py / micro_unzip.py`
 MicroPython で ZIP 圧縮・展開を行うための簡易ユーティリティ
 
 ハードウェア / サービス固有モジュール
 
-sdcard.py
+- `sdcard.py`
 SPI ベースの SD カードドライバ
 
-soracom_harvest_files.py
+- `soracom_harvest_files.py`
 SORACOM Harvest Files サービス用クライアント
 
-ublox_sara_r.py
+- `ublox_sara_r.py`
 u-blox F9P GNSS 受信機と SARA-R モデムの統合ドライバ
 
-state.py
-状態管理やフラグ操作の軽量ヘルパー
 
-インストール（Raspberry Pi Pico2）
+## インストール（Raspberry Pi Pico2）
 
 PocketMicroLIB は Python パッケージではありません。
 必要な .py ファイルをそのまま MicroPython デバイスにコピーして使用します。
@@ -65,7 +63,7 @@ PocketMicroLIB は Python パッケージではありません。
 
 mpremote cp src/*.py :/
 
-ライセンス
+## ライセンス
 
 このプロジェクトは MIT ライセンス で公開されています。
 詳細は LICENSE ファイルをご覧ください。
