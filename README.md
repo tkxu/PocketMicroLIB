@@ -1,3 +1,5 @@
+日本語版はこちら → [README_ja.md](README_ja.md)
+
 # PocketMicroLIB
 PocketMicroLIB – Practical MicroPython libraries for LTE IoT devices using GNSS.
 
