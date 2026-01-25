@@ -85,4 +85,4 @@ PocketMicroLIB/
    ├─ micro_zip.py               # MicroPython 用簡易 zip ユーティリティ
    ├─ sdcard.py                  # SD カードドライバ（SPI ベース）
    ├─ soracom_harvest_files.py   # SORACOM Harvest Files クライアント
-   └─ ublox_sara_r.py            # u-blox F9P GNSS + SARA-R モデム統合ドライバ
+   └─ ublox_sara_r.py            # u-blox SARA-R410/R510 モデム統合ドライバ
