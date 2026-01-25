@@ -27,31 +27,31 @@ PocketMicroLIB は、Raspberry Pi Pico などの組込みマイクロコント�
 - `micro_logger.py`  
 MicroPython 向けのシンプルなログ出力ユーティリティ
 
-- `micro_modem.py`
+- `micro_modem.py`  
 AT コマンドベースのセルラーモデム用汎用ベースクラス
 
-- `micro_socket.py`
+- `micro_socket.py`  
 モデム依存部分を抽象化したソケットレイヤー
 
-- `micro_http_client.py`
+- `micro_http_client.py`  
 ソケットレイヤー上に構築した軽量 HTTP クライアント
 
-- `micro_storage_manager.py`
+- `micro_storage_manager.py`  
 ファイル操作やログ管理などのストレージユーティリティ
 
-- `micro_zip.py / micro_unzip.py`
+- `micro_zip.py / micro_unzip.py`  
 MicroPython で ZIP 圧縮・展開を行うための簡易ユーティリティ
 
 ハードウェア / サービス固有モジュール
 
-- `sdcard.py`
+- `sdcard.py`  
 SPI ベースの SD カードドライバ
 
-- `soracom_harvest_files.py`
+- `soracom_harvest_files.py`  
 SORACOM Harvest Files サービス用クライアント
 
-- `ublox_sara_r.py`
-u-blox F9P GNSS 受信機と SARA-R モデムの統合ドライバ
+- `ublox_sara_r.py`  
+u-blox SARA-R410/R510 モデムの統合ドライバ
 
 
 ## インストール（Raspberry Pi Pico2）
