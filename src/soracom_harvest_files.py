@@ -1,10 +1,12 @@
 """
 File        : soracom_harvest_files.py
-Description :Non-blocking, chunked file uploader for SORACOM Harvest Files on MicroPython. Supports retries, wait handling, and robust HTTP response processing.
+Description : Non-blocking, chunked file uploader for SORACOM Harvest Files on MicroPython.
+              Supports retries, wait handling, and robust HTTP response processing.
 Author      : https://github.com/tkxu/
 MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
+              Rev. 0.91  2026-04-19
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
 """
@@ -16,11 +18,10 @@ from micro_logger import log_status, LEVEL_DEBUG2, LEVEL_DEBUG, LEVEL_INFO, LEVE
 
 class SoracomHarvestFiles:
     """
-    Non-blocking Harvest Files uploader (state machine)
+    Non-blocking Harvest Files uploader implemented as a state machine.
 
-    - start() + tick()
-    - chunked body send
-    - retry / wait / abort handling
+    Usage:
+        call start(filename) to begin, then call tick() repeatedly.
     """
 
     HOST = "harvest-files.soracom.io"
@@ -38,27 +39,26 @@ class SoracomHarvestFiles:
     HF_WAIT     = 7
 
     def __init__(self, http_client):
-        
         self.http = http_client
 
         self.state = self.HF_IDLE
-
         self.filename = ""
         self.file = None
         self.filesize = 0
 
         self.buf = b""
         self.buf_offset = 0
-
         self.sent_bytes = 0
 
         self.retry = 0
         self.header_retry = 0
         self.next_time = 0
 
+        self.closing_start = 0
         self.last_response = b""
 
     # Public API
+
     def start(self, filename) -> bool:
         if self.state != self.HF_IDLE:
             log_status("[SORA] start called but not IDLE", LEVEL_WARN)
@@ -78,7 +78,16 @@ class SoracomHarvestFiles:
         except Exception as e:
             log_status(f"[SORA] send chunk error {e}", LEVEL_WARN)
             return 0
-    
+
+    def is_busy(self) -> bool:
+        """Return True while an upload is in progress."""
+        return self.state != self.HF_IDLE
+
+    def get_progress_bytes(self):
+        """Return (sent_bytes, filesize) for progress monitoring."""
+        return self.sent_bytes, self.filesize
+
+    # Main tick  (call this repeatedly from the main loop)
     def tick(self):
         now = utime.time()
 
@@ -88,7 +97,7 @@ class SoracomHarvestFiles:
         elif self.state == self.HF_PREPARE:
             log_status("[SORA] PREPARE start", LEVEL_DEBUG)
 
-            # --- close existing file ---
+            # Close any previously open file handle
             if getattr(self, "file", None):
                 try:
                     self.file.close()
@@ -96,19 +105,17 @@ class SoracomHarvestFiles:
                     log_status(f"[SORA] file close error {e}", LEVEL_WARN)
                 self.file = None
 
-            # --- stat & open with retry ---
+            # Stat and open the file (up to 5 attempts)
             for attempt in range(5):
                 try:
                     st = os.stat(self.filename)
                     self.filesize = st[6]
-
-                    log_status(
-                        f"[SORA] PREPARE stat ok size={self.filesize}",
-                        LEVEL_DEBUG,
-                    )
+                    log_status(f"[SORA] PREPARE stat ok size={self.filesize}", LEVEL_DEBUG)
 
                     if self.filesize <= 0:
                         log_status("[SORA] file size is zero", LEVEL_WARN)
+                        self.closing_start = 0
+                        self.last_response = b""
                         self.state = self.HF_DONE
                         return
 
@@ -118,10 +125,7 @@ class SoracomHarvestFiles:
                     return
 
                 except OSError as e:
-                    log_status(
-                        f"[SORA] PREPARE attempt {attempt+1}/5 failed {e}",
-                        LEVEL_WARN,
-                    )
+                    log_status(f"[SORA] PREPARE attempt {attempt+1}/5 failed: {e}", LEVEL_WARN)
                     utime.sleep_ms(50)
 
             log_status("[SORA] PREPARE failed after retries", LEVEL_ERROR)
@@ -140,10 +144,7 @@ class SoracomHarvestFiles:
                 self.state = self.HF_SENDING
             else:
                 self.header_retry += 1
-                log_status(
-                    f"[SORA] OPEN failed retry={self.header_retry}",
-                    LEVEL_WARN,
-                )
+                log_status(f"[SORA] OPEN failed retry={self.header_retry}", LEVEL_WARN)
                 if self.header_retry >= 3:
                     self.state = self.HF_ABORT
                 else:
@@ -160,6 +161,8 @@ class SoracomHarvestFiles:
                         f"[SORA] Upload finished {self.sent_bytes}/{self.filesize}",
                         LEVEL_INFO,
                     )
+                    self.closing_start = 0   # Reset before entering HF_CLOSING
+                    self.last_response = b""
                     self.state = self.HF_CLOSING
                     return
 
@@ -169,59 +172,66 @@ class SoracomHarvestFiles:
                 self.buf_offset += sent
                 self.sent_bytes += sent
                 self.retry = 0
-
-                log_status(
-                    f"[SORA] SEND {self.sent_bytes}/{self.filesize}",
-                    LEVEL_DEBUG2,
-                )
+                log_status(f"[SORA] SEND {self.sent_bytes}/{self.filesize}", LEVEL_DEBUG2)
 
                 if self.buf_offset >= len(self.buf):
                     self.buf = b""
                     self.buf_offset = 0
-
             else:
                 self.retry += 1
-                log_status(
-                    f"[SORA] SEND failed retry={self.retry}",
-                    LEVEL_WARN,
-                )
+                log_status(f"[SORA] SEND failed retry={self.retry}", LEVEL_WARN)
                 if self.retry >= 20:
                     self.state = self.HF_ABORT
 
         elif self.state == self.HF_CLOSING:
-            log_status("[SORA] CLOSING wait response", LEVEL_DEBUG)
+            # First tick: start the idle timer
+            if self.closing_start == 0:
+                self.closing_start = utime.ticks_ms()
+                return
 
-            try:
-                self.last_response = self.http.read_response(timeout_ms=10000)
-                log_status(f"[SORA] read response: {self.last_response}", LEVEL_DEBUG2)
-            except Exception as e:
-                log_status(f"[SORA] response read error {e}", LEVEL_WARN)
-                self.last_response = b""
+            # Poll URC to trigger _rx_pending, then read available data
+            self.http.sock.modem.poll_urc()
+            self.http.sock.poll()
+            data = self.http.sock.recv()
+
+            if data:
+                self.last_response += data
+                self.closing_start = utime.ticks_ms()  # Reset idle timer on data
+                return
+
+            # Proceed to HF_DONE after 1500 ms of no new data
+            if utime.ticks_diff(utime.ticks_ms(), self.closing_start) < 1500:
+                return
 
             self.state = self.HF_DONE
 
         elif self.state == self.HF_DONE:
-            log_status(f"[SORA] HTTP done: {self.last_response}", level=LEVEL_DEBUG)
+            log_status(f"[SORA] HTTP done: {self.last_response}", LEVEL_DEBUG)
 
             try:
                 if self.file:
                     self.file.close()
                     self.file = None
-
-                if self.last_response.startswith(b"HTTP/1.1 200") or \
-                   self.last_response.startswith(b"HTTP/1.1 201"):
-                    log_status("[SORA] HTTP Response OK", LEVEL_INFO)
-                else:
-                    log_status(
-                        f"[SORA] HTTP Response NG ={self.last_response[:64]}",
-                        LEVEL_WARN,
-                    )
-                self.http.close()
-
             except Exception as e:
-                log_status(f"[SORA] DONE cleanup error {e}", LEVEL_WARN)
+                log_status(f"[SORA] file close error: {e}", LEVEL_WARN)
 
-            self.state = self.HF_IDLE
+            try:
+                self.http.close()
+            except Exception as e:
+                log_status(f"[SORA] http close error: {e}", LEVEL_WARN)
+
+            if self.last_response.startswith(b"HTTP/1.1 200") or \
+               self.last_response.startswith(b"HTTP/1.1 201"):
+                log_status("[SORA] HTTP response OK", LEVEL_INFO)
+            else:
+                log_status(
+                    f"[SORA] HTTP response NG: {self.last_response[:64]}",
+                    LEVEL_WARN,
+                )
+
+            self.closing_start = 0
+            self.last_response = b""
+            self.state         = self.HF_IDLE
 
         elif self.state == self.HF_ABORT:
             log_status(
@@ -232,27 +242,35 @@ class SoracomHarvestFiles:
             try:
                 if self.file:
                     self.file.close()
-            except:
+                    self.file = None
+            except Exception:
                 pass
 
-            self.http.close()
-            self.state = self.HF_WAIT
-            self.next_time = now + 300
+            try:
+                self.http.close()
+            except Exception:
+                pass
+
+            # Reset retry counters before entering wait
+            self.retry        = 0
+            self.header_retry = 0
+            self.state        = self.HF_WAIT
+            self.next_time    = now + 300
 
         elif self.state == self.HF_WAIT:
             if now >= self.next_time:
-                log_status("[SORA] WAIT timeout -> PREPARE", LEVEL_DEBUG)
-                self.retry = 0
-                self.header_retry = 0
+                log_status("[SORA] WAIT done -> PREPARE", LEVEL_DEBUG)
                 self.state = self.HF_PREPARE
 
+    # Internal helpers
 
-    def is_busy(self) -> bool:
-        return self.state != self.HF_IDLE
-
-    def get_progress_bytes(self):
-        return self.sent_bytes, self.filesize
-
+    def _send_chunk(self, data: bytes) -> int:
+        """Send a chunk of body data. Returns bytes sent, or 0 on error."""
+        try:
+            return self.http.send_body(data)
+        except Exception as e:
+            log_status(f"[SORA] send chunk error: {e}", LEVEL_WARN)
+            return 0
 
     # Internal helpers
     def _post(self, path="/") -> bool:
@@ -267,7 +285,7 @@ class SoracomHarvestFiles:
             "Connection: close\r\n"
             "\r\n"
         )
-    
+
         ok = self.http.send_header(
             method="POST",
             path=path,
@@ -281,7 +299,7 @@ class SoracomHarvestFiles:
         return True
 
 
-# TEST CODE
+# === TEST CODE === 
 if __name__ == "__main__":
     from machine import UART, Pin
     import utime
@@ -333,8 +351,13 @@ if __name__ == "__main__":
             log_status("SoracomHarvestFiles upload finished", LEVEL_INFO)
             break
 
+        if harvest.state == harvest.HF_WAIT:
+            log_status("SoracomHarvestFiles upload failed (WAIT)", LEVEL_ERROR)
+            break
+
         if utime.time() - start_time > TIMEOUT_SEC:
             log_status("SoracomHarvestFiles upload timeout", LEVEL_ERROR)
+            harvest.close()
             break
 
     modem.disconnect()

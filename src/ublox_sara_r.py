@@ -8,6 +8,7 @@ MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
               Rev. 0.93  2026-01-17
+              Rev. 0.94  2026-04-19
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
 """
@@ -34,6 +35,11 @@ class SaraR(MicroModem):
  
         self._rx_pending = {}
         self._rx_buffer = bytearray()
+        
+        self._uusocl_received = set()
+        
+        self.socket_create_fail_count = 0
+        self.socket_create_fail_limit = 5
 
     def initialize(self, max_retries=3) -> bool:
         """Initialize the modem and detect model. Returns True on success."""
@@ -440,9 +446,50 @@ class SaraR(MicroModem):
 
     def socket_create(self) -> int:
         if not self.send_at(b"AT+USOCR=6", timeout=5000):
-            log_status(f"[SARA] USOCR failed: last_response = {self.last_response}", LEVEL_ERROR)
+            log_status(f"[SARA] USOCR failed: {self.last_response}", LEVEL_ERROR)
+            return self._handle_socket_create_fail()
+
+        sock = self._parse_socket_id(self.last_response)
+
+        if sock < 0:
+            return self._handle_socket_create_fail()
+
+        self.socket_create_fail_count = 0
+        return sock
+
+    def _handle_socket_create_fail(self) -> int:
+        self.socket_create_fail_count += 1
+
+        log_status(
+            f"[SARA] socket_create failed count={self.socket_create_fail_count}",
+            LEVEL_WARN
+        )
+
+        if self.socket_create_fail_count < 3:
+            utime.sleep_ms(500)
             return -1
-        return self._parse_socket_id(self.last_response)
+
+        if self.socket_create_fail_count < 5:
+            log_status("[SARA] closing all sockets", LEVEL_WARN)
+            self.send_at(b"AT+USOCL=0")
+            self.send_at(b"AT+USOCL=1")
+            utime.sleep(1)
+            return -1
+
+        if self.socket_create_fail_count < 8:
+            log_status("[SARA] reconnect PDP", LEVEL_ERROR)
+            self.disconnect()
+            utime.sleep(2)
+            self.connect_state = "idle"
+            return -1
+
+        log_status("[SARA] modem reset (CFUN)", LEVEL_ERROR)
+        self.send_at(b"AT+CFUN=16", timeout=30000)  # R510
+        utime.sleep(5)
+        self.send_at(b"AT+CFUN=1", timeout=30000)
+
+        self.socket_create_fail_count = 0
+        return -1
 
     def _parse_socket_id(self, resp: bytes) -> int:
 
@@ -589,31 +636,47 @@ class SaraR(MicroModem):
 
     def socket_recv(self, sock_num: int, size: int = 512) -> bytes:
         """
-        Receive data from socket using +UUSORD URC.
-        Returns bytes received, may be empty if no data.
-        Handles multiple URC in last_response safely.
+        Safe receive:
+        - No AT during URC handling
+        - Use _rx_pending as trigger
         """
+
+        # --- If there is remaining data in buffer, return it first ---
         if self._rx_buffer:
             data = self._rx_buffer[:size]
             self._rx_buffer = self._rx_buffer[size:]
             return bytes(data)
 
-        if not self.wait_response("+UUSORD:", timeout=3000):
-            # Timeout
+        # --- Check pending length (set by URC handler) ---
+        length = self._rx_pending.get(sock_num, 0)
+        if length <= 0:
+            return b""
+
+        # --- Issue AT+USORD here (safe timing outside URC context) ---
+        cmd = f"AT+USORD={sock_num},{length}\r".encode()
+
+        if not self.send_at(cmd, timeout=3000):
+            log_status("[SARA] USORD failed", LEVEL_WARN)
             return b""
 
         resp = self.last_response
-        ok_received, uusocl_received = self._handle_uusord(resp, sock_num_expected=sock_num)
 
-        if ok_received:
+        payload = self.extract_usord_data(resp)
+
+        if payload:
+            self._rx_buffer.extend(payload)
+
+        # --- Clear pending flag ---
+        self._rx_pending[sock_num] = 0
+
+        # --- Return data from buffer ---
+        if self._rx_buffer:
             data = self._rx_buffer[:size]
             self._rx_buffer = self._rx_buffer[size:]
             return bytes(data)
 
         return b""
 
-    
-    
     def _parse_usowr_len(self, resp: bytes) -> int:
         sent = None
 
@@ -658,23 +721,8 @@ class SaraR(MicroModem):
 
                     if sock_num_expected is not None and sock_num != sock_num_expected:
                         continue
-
-                    cmd = f"AT+USORD={sock_num},{length}\r"
-                    if not self.send_at(cmd):
-                        log_status("[SARA] send_at failed for USORD", LEVEL_WARN)
-                        continue
-
-                    resp = self.last_response
-                    payload = self.extract_usord_data(resp)
-                    if payload:
-                        self._rx_buffer.extend(payload)
-
-                    for resp_line in resp.split(b"\r\n"):
-                        resp_line = resp_line.strip()
-                        if resp_line == b"OK":
-                            ok_received = True
-                        elif resp_line.startswith(b"+UUSOCL:"):
-                            uusocl_received = True
+                         
+                    self._rx_pending[sock_num] = length
 
                 except Exception as e:
                     log_status(f"[SARA] _handle_uusord parse error: {e}", LEVEL_WARN)
@@ -706,18 +754,74 @@ class SaraR(MicroModem):
 
         return resp[start + 1 : end]
 
+    def poll_urc(self):
+        data = self._read()
+        if not data:
+            return
+        log_status(f"[SARA] poll_urc: {data}", LEVEL_DEBUG)
+        if b"+UUSORD:" in data:
+            self._handle_uusord(data)
+        if b"+UUSOCL:" in data:
+            log_status(f"[SARA] poll_urc: socket closed by peer", LEVEL_WARN)
+
+            for line in data.split(b"\r\n"):
+                if line.startswith(b"+UUSOCL:"):
+                    try:
+                        sock_num = int(line.split(b":")[1].strip())
+                        self._uusocl_received.add(sock_num)
+                    except Exception:
+                        pass
+
     def socket_close(self, sock_num: int):
         """
-        Close the specified socket.
+        Close the specified socket with proper cleanup.
         """
-        # Send socket close command
-        if not self.send_at(f"AT+USOCL={sock_num}\r".encode(), timeout=5000):
-                log_status("[SARA] USOCL:Timeout", LEVEL_ERROR)
 
-        # Clear any pending data for this socket
+        # --- Wait for any ongoing transmission to complete ---
+        utime.sleep_ms(300)
+
+        # --- Flush remaining UART data (discard unread data) ---
+        flushed = self.uart.read() if self.uart.any() else b""
+        if flushed:
+            log_status(f"[SARA] socket_close flush: {flushed}", LEVEL_DEBUG)
+            if b"+UUSORD:" in flushed:
+                # AT+USORD は発行しない。_rx_pending だけクリアする
+                log_status(f"[SARA] socket_close: discard pending RX", LEVEL_DEBUG)
+            if b"+UUSOCL:" in flushed:
+                log_status(f"[SARA] socket {sock_num} already closed by peer", LEVEL_INFO)
+                self._rx_pending[sock_num] = 0
+                self._rx_buffer = bytearray()
+                self._uusocl_received.discard(sock_num)
+                return
+
+        # --- Clear RX pending state and buffer ---
         self._rx_pending[sock_num] = 0
+        self._rx_buffer = bytearray()
 
+        # --- If already closed by peer, skip AT+USOCL ---
+        if sock_num in self._uusocl_received:
+            log_status(f"[SARA] socket {sock_num} already closed by peer, skip USOCL", LEVEL_INFO)
+            self._uusocl_received.discard(sock_num)
+            return
 
+        # --- Send AT+USOCL command to close socket ---
+        if not self.send_at(f"AT+USOCL={sock_num}\r".encode(), timeout=10000):
+            log_status(f"[SARA] USOCL={sock_num} failed: {self.last_response}", LEVEL_ERROR)
+
+        # --- Wait for +UUSOCL URC (up to 3 seconds) ---
+        deadline = utime.ticks_ms()
+        while utime.ticks_diff(utime.ticks_ms(), deadline) < 3000:
+            chunk = self._read()
+            if chunk:
+                log_status(f"[SARA] post-USOCL URC: {chunk}", LEVEL_DEBUG)
+                if b"+UUSOCL:" in chunk:
+                    log_status(f"[SARA] socket {sock_num} close confirmed", LEVEL_INFO)
+                    break
+            utime.sleep_ms(50)
+
+        log_status(f"[SARA] socket {sock_num} closed", LEVEL_INFO)
+
+        
     def disconnect(self):
         
         utime.sleep(1)
@@ -805,5 +909,4 @@ if __name__ == "__main__":
 
     socket.close()
     modem.disconnect()
-
 

@@ -7,6 +7,7 @@ Author      : https://github.com/tkxu/
 MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
+              Rev. 0.91  2026-04-19
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
 """
@@ -115,29 +116,6 @@ class MicroHttpClient:
         return True
 
 
-    def read_response(self, timeout_ms: int = 5000) -> bytes:
-        """
-        Read HTTP response until no data arrives or timeout.
-        """
-        self._response_buffer[:] = b""
-        start = utime.ticks_ms()
-        last_recv = start
-
-        while utime.ticks_diff(utime.ticks_ms(), start) < timeout_ms:
-            self.sock.poll()
-            data = self.sock.recv()
-
-            if data:
-                self._response_buffer.extend(data)
-                #last_recv = utime.ticks_ms()
-                break
-            else:
-                if utime.ticks_diff(utime.ticks_ms(), last_recv) > 500:
-                    break
-
-            utime.sleep_ms(50)
-
-        return bytes(self._response_buffer)
 
     def close(self):
         """
@@ -204,12 +182,6 @@ if __name__ == "__main__":
             if sent <= 0:
                 raise SystemExit("send_body failed")
             utime.sleep_ms(50)
-
-    # --- receive response ---
-    utime.sleep_ms(1000)
-    resp = http.read_response(timeout_ms=1000)
-    if resp:
-        print(resp.decode())
 
     http.close()
     modem.disconnect()

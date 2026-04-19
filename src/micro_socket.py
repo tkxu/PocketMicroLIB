@@ -5,6 +5,7 @@ Author      : https://github.com/tkxu/
 MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
+              Rev. 0.91  2026-04-19
 
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
@@ -46,6 +47,9 @@ class MicroSocket:
 
     # receive
     def poll(self):
+        if self.sock_num < 0:
+            return False        
+        
         data = self.modem.socket_recv(self.sock_num, 1024)
         #log_status(f"[SOCK] poll", LEVEL_DEBUG)
         if data:
@@ -68,12 +72,18 @@ class MicroSocket:
         self._rx_buffer[:] = b""
 
     def close(self):
-        log_status(f"[SOCK] close", LEVEL_INFO)
+        log_status(f"[SOCK] close sock_num={self.sock_num}", LEVEL_INFO)
         if self.sock_num >= 0:
             self.modem.socket_close(self.sock_num)
         self.sock_num = -1
         self.clear()
 
+        # Resetting the SaraR (to prevent socket ID mismatch and residual buffer data)
+        self.modem.sock_num = -1
+        self.modem._rx_buffer = bytearray()
+        self.modem._rx_pending.clear()
+
+        log_status("[SOCK] close complete", LEVEL_INFO)
 
 # TEST CODE
 if __name__ == "__main__":
@@ -133,13 +143,34 @@ if __name__ == "__main__":
             utime.sleep_ms(100)
 
     start = utime.ticks_ms()
+    response = bytearray()
+    last_recv = start
 
     while utime.ticks_diff(utime.ticks_ms(), start) < 10000:
+
+        modem.poll_urc()
+
         micro_socket.poll()
         data = micro_socket.recv()
 
+        if data:
+            response.extend(data)
+            last_recv = utime.ticks_ms()
+            log_status(f"[TEST] recv: {data}", LEVEL_INFO)
 
-#    utime.sleep_ms(10000)
+        else:
+            if utime.ticks_diff(utime.ticks_ms(), last_recv) > 1500:
+                log_status("[TEST] recv idle timeout, done", LEVEL_INFO)
+                break
+
+        utime.sleep_ms(20)
+
+    log_status(f"[TEST] response: {bytes(response)}", LEVEL_INFO)
+
+    if response.startswith(b"HTTP/1.1 200") or response.startswith(b"HTTP/1.1 201"):
+        log_status("[TEST] HTTP OK", LEVEL_INFO)
+    else:
+        log_status(f"[TEST] HTTP NG: {bytes(response[:64])}", LEVEL_WARN)
 
     micro_socket.close()
     modem.disconnect()
