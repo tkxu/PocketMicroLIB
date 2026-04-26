@@ -9,6 +9,7 @@ Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
               Rev. 0.93  2026-01-17
               Rev. 0.94  2026-04-19
+              Rev. 0.95  2026-04-26
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
 """
@@ -27,6 +28,7 @@ class SaraR(MicroModem):
         self.imsi = ""
         self.imei = ""
         self.rssi = -1
+        self.sock_num = -1
         self.modem_initialized = False
         
         # --- connection state ---
@@ -40,6 +42,9 @@ class SaraR(MicroModem):
         
         self.socket_create_fail_count = 0
         self.socket_create_fail_limit = 5
+
+        self.socket_state = "idle"
+        self.socket_start = utime.ticks_ms()
 
     def initialize(self, max_retries=3) -> bool:
         """Initialize the modem and detect model. Returns True on success."""
@@ -90,9 +95,6 @@ class SaraR(MicroModem):
 
         log_status("[SARA] Modem failed to initialize after retries", level=LEVEL_ERROR)
         
-        
-        modem.get_imsi()
-        
         return False
 
 
@@ -122,9 +124,6 @@ class SaraR(MicroModem):
             hour, minute, second = map(int, time_part.split(":"))
 
             full_year = 2000 + year_short
-            # R410 ã¯ JST +9 è£œæ­£ãŒå¿…è¦
-            if self.modem_model == "R410":
-                hour = (hour + 9) % 24
 
             return (full_year, month, day, hour, minute, second)
 
@@ -149,13 +148,13 @@ class SaraR(MicroModem):
 
             full_year, month, day, hour, minute, second = dt
 
-            try:
-                # --- normalize via mktime ---
-                epoch = utime.mktime(
-                    (full_year, month, day, hour, minute, second, 0, 0)
-                )
-                y, m, d, h, mi, s, w, _ = utime.localtime(epoch)
+            if self.modem_model == "R410":
+                epoch = utime.mktime((full_year, month, day, hour + 9, minute, second, 0, 0))
+            else:
+                epoch = utime.mktime((full_year, month, day, hour, minute, second, 0, 0))
 
+            try:
+                y, m, d, h, mi, s, w, _ = utime.localtime(epoch)
                 rtc.datetime((y, m, d, w, h, mi, s, 0))
                 self.rtc_initialized = True
 
@@ -484,7 +483,10 @@ class SaraR(MicroModem):
             return -1
 
         log_status("[SARA] modem reset (CFUN)", LEVEL_ERROR)
-        self.send_at(b"AT+CFUN=16", timeout=30000)  # R510
+        if self.modem_model == "R410":
+            self.send_at(b"AT+CFUN=15", timeout=30000)
+        else:
+            self.send_at(b"AT+CFUN=16", timeout=30000)
         utime.sleep(5)
         self.send_at(b"AT+CFUN=1", timeout=30000)
 
@@ -538,7 +540,7 @@ class SaraR(MicroModem):
                 log_status(f"[SARA] Socket connected: {sock_num}", LEVEL_INFO)
                 return True
 
-            # +UUSOCL ãŒå…ˆã«æ¥ãŸå ´åˆ
+            # +UUSOCL ‚ªæ‚É—ˆ‚½ê‡
             if b"+UUSOCL" in self.last_response:
                 log_status(
                     f"[SARA] USOCO failed: socket closed early {self.last_response}",
@@ -559,6 +561,9 @@ class SaraR(MicroModem):
 
             return None
 
+        elif self.socket_state == "done":
+            self.socket_state = "idle"
+            return True
 
     def socket_send(self, data: bytes) -> int:
         if self.sock_num < 0:
@@ -647,29 +652,22 @@ class SaraR(MicroModem):
             self._rx_buffer = self._rx_buffer[size:]
             return bytes(data)
 
-        # --- Check pending length (set by URC handler) ---
-        length = self._rx_pending.get(sock_num, 0)
-        if length <= 0:
+        pending = self._rx_pending.get(sock_num, 0)
+        if pending <= 0:
             return b""
 
-        # --- Issue AT+USORD here (safe timing outside URC context) ---
-        cmd = f"AT+USORD={sock_num},{length}\r".encode()
+        self._rx_pending[sock_num] = 0
 
+        length = min(pending, 1024)
+        cmd = f"AT+USORD={sock_num},{length}\r".encode()
         if not self.send_at(cmd, timeout=3000):
             log_status("[SARA] USORD failed", LEVEL_WARN)
             return b""
 
-        resp = self.last_response
-
-        payload = self.extract_usord_data(resp)
-
+        payload = self.extract_usord_data(self.last_response)
         if payload:
             self._rx_buffer.extend(payload)
 
-        # --- Clear pending flag ---
-        self._rx_pending[sock_num] = 0
-
-        # --- Return data from buffer ---
         if self._rx_buffer:
             data = self._rx_buffer[:size]
             self._rx_buffer = self._rx_buffer[size:]
@@ -785,7 +783,7 @@ class SaraR(MicroModem):
         if flushed:
             log_status(f"[SARA] socket_close flush: {flushed}", LEVEL_DEBUG)
             if b"+UUSORD:" in flushed:
-                # AT+USORD ã¯ç™ºè¡Œã—ãªã„ã€‚_rx_pending ã ã‘ã‚¯ãƒªã‚¢ã™ã‚‹
+                # AT+USORD ‚Í”­s‚µ‚È‚¢B_rx_pending ‚¾‚¯ƒNƒŠƒA‚·‚é
                 log_status(f"[SARA] socket_close: discard pending RX", LEVEL_DEBUG)
             if b"+UUSOCL:" in flushed:
                 log_status(f"[SARA] socket {sock_num} already closed by peer", LEVEL_INFO)
@@ -909,4 +907,3 @@ if __name__ == "__main__":
 
     socket.close()
     modem.disconnect()
-

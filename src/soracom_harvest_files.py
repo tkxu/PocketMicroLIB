@@ -59,10 +59,24 @@ class SoracomHarvestFiles:
 
     # Public API
 
-    def start(self, filename) -> bool:
+    def start(self, filename, force=False) -> bool:
         if self.state != self.HF_IDLE:
-            log_status("[SORA] start called but not IDLE", LEVEL_WARN)
-            return False
+            if force:
+                log_status("[SORA] start: force reset", LEVEL_WARN)
+                try:
+                    self.http.close()
+                except Exception:
+                    pass
+                if self.file:
+                    try:
+                        self.file.close()
+                    except Exception:
+                        pass
+                    self.file = None
+                self.state = self.HF_IDLE
+            else:
+                log_status("[SORA] start called but not IDLE", LEVEL_WARN)
+                return False
 
         self.filename = filename
         self.sent_bytes = 0
@@ -70,15 +84,23 @@ class SoracomHarvestFiles:
         return True
 
     def close(self):
-        self.http.close()
-
-    def _send_chunk(self, data: bytes) -> int:
         try:
-            return self.http.send_body(data)
+            if self.file:
+                self.file.close()
+                self.file = None
         except Exception as e:
-            log_status(f"[SORA] send chunk error {e}", LEVEL_WARN)
-            return 0
+            log_status(f"[SORA] close: file close error: {e}", LEVEL_WARN)
 
+        try:
+            self.http.close()
+        except Exception as e:
+            log_status(f"[SORA] close: http close error: {e}", LEVEL_WARN)
+
+        self.state = self.HF_IDLE
+        self.retry = 0
+        self.header_retry = 0
+        log_status("[SORA] close: state reset to IDLE", LEVEL_INFO)
+    
     def is_busy(self) -> bool:
         """Return True while an upload is in progress."""
         return self.state != self.HF_IDLE
@@ -361,3 +383,4 @@ if __name__ == "__main__":
             break
 
     modem.disconnect()
+    
