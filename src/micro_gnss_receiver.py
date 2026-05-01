@@ -6,7 +6,7 @@ MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
               Rev. 0.92  2026-04-19
-              Rev. 0.93  2026-04-26
+              Rev. 0.94  2026-05-02              
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
 """
@@ -14,6 +14,7 @@ License     : MIT License (see LICENSE file)
 import _thread
 import utime
 from machine import Pin, UART
+from micro_logger import log_status, LEVEL_DEBUG, LEVEL_INFO, LEVEL_WARN, LEVEL_ERROR
 
 
 class MicroGNSSReceiver:
@@ -37,7 +38,7 @@ class MicroGNSSReceiver:
     RX_THREAD_SLEEP_MS = 2
     WAIT_FIX_POLL_MS = 50
     MAIN_LOOP_SLEEP_MS = 200
-
+    
     def __init__(self, uart, debug=False, min_fix_quality=1):
         """
         Args:
@@ -52,7 +53,12 @@ class MicroGNSSReceiver:
                 5 = RTK Float
         """
         self.uart = uart
-        self.debug = debug
+
+        if debug:
+            self.log_level = LEVEL_INFO
+        else:
+            self.log_level = LEVEL_ERROR
+            
         self.min_fix_quality = min_fix_quality
 
         # Protects both buffer and gps_data
@@ -69,6 +75,10 @@ class MicroGNSSReceiver:
             b"GGA": self._handle_gga,
         }
 
+    def _log(self, msg, level=LEVEL_INFO):
+        if level >= self.log_level:
+            log_status(msg, level)
+
     # === internal utility ===
     def _empty_gps_data(self):
         return {
@@ -77,10 +87,6 @@ class MicroGNSSReceiver:
             "alt": None,
             "hdop": None,
         }
-
-    def _debug_print(self, *args):
-        if self.debug:
-            print(*args)
 
     # === uart ===
     def _uart_read(self):
@@ -121,11 +127,15 @@ class MicroGNSSReceiver:
                         self.buffer.extend(data)
                         self.uart_bytes += len(data)
 
+                    # FIX: check_buffer() acquires _lock internally (non-reentrant).
+                    # Call it outside the lock to avoid deadlock.
+                    self.check_buffer()
+
             except OSError as e:
-                self._debug_print("[RX ERROR]", e)
+                self._log(f"[RX ERROR]{e}", level=LEVEL_ERROR)
 
             except RuntimeError as e:
-                self._debug_print("[RX ERROR]", e)
+                self._log(f"[RX ERROR]{e}", level=LEVEL_ERROR)
 
             utime.sleep_ms(self.RX_THREAD_SLEEP_MS)
 
@@ -146,7 +156,7 @@ class MicroGNSSReceiver:
                 self.buffer = bytearray(
                     self.buffer[-self.TRIM_BUFFER_SIZE:]
                 )
-                self._debug_print("[BUFFER TRIMMED]")
+                self._log("[BUFFER TRIMMED]")
 
             while True:
                 result = self._check_buffer_impl()
@@ -211,10 +221,10 @@ class MicroGNSSReceiver:
         except UnicodeError:
             return False
 
-        self._debug_print("[NMEA]", text)
+        self._log(f"[NMEA]{text}")
 
         if not self._verify_nmea_checksum(text):
-            self._debug_print("[CHECKSUM ERROR]", text)
+            self._log(f"[CHECKSUM ERROR]{text}", level=LEVEL_ERROR)
             return False
 
         try:
@@ -268,12 +278,7 @@ class MicroGNSSReceiver:
         """
         self._parse_nmea_gga(text)
 
-        self._debug_print(
-            "[PARSED GGA]",
-            self.gps_data,
-            "FIX:",
-            self.has_fix
-        )
+        self._log(f"[PARSED GGA]{self.gps_data} FIX:{self.has_fix}")
 
         return self.has_fix
 
@@ -292,7 +297,10 @@ class MicroGNSSReceiver:
             lat = self._convert(parts[2], parts[3])
             lon = self._convert(parts[4], parts[5])
 
-            fix_quality = int(parts[6]) if parts[6] else 0
+            try:
+                fix_quality = int(parts[6]) if parts[6] else 0
+            except Exception:
+                fix_quality = 0
             hdop = float(parts[8]) if parts[8] else None
             alt = float(parts[9]) if parts[9] else None
 
@@ -313,7 +321,7 @@ class MicroGNSSReceiver:
 
         except (ValueError, IndexError) as e:
             self.has_fix = False
-            self._debug_print("[GGA PARSE ERROR]", e)
+            self._log(f"[GGA PARSE ERROR]{e}", level=LEVEL_ERROR)
 
     def _convert(self, coord, direction):
         """
@@ -374,8 +382,9 @@ class MicroGNSSReceiver:
                     with self._lock:
                         self.buffer.extend(data)
 
-            if self.check_buffer() and self.has_fix:
-                return True
+            if self.check_buffer():
+                if self.has_fix:
+                    return True
 
             utime.sleep_ms(self.WAIT_FIX_POLL_MS)
 
@@ -396,39 +405,25 @@ class MicroGNSSReceiver:
 # === test code ===
 if __name__ == "__main__":
 
-    uart = UART(
-        1,
-        baudrate=115200,
-        tx=Pin(8),
-        rx=Pin(9)
-    )
-
-    gnss = MicroGNSSReceiver(
-        uart,
-        debug=True,
-        min_fix_quality=1
-    )
-
+    uart = UART( 1, baudrate=115200, tx=Pin(8), rx=Pin(9))
+    gnss = MicroGNSSReceiver( uart, debug=True, min_fix_quality=1)
     gnss.start()
-
     print("Waiting for GNSS fix...")
 
-    if not gnss.wait_first_fix(timeout_sec=60):
-        print("Fix timeout. Continuing anyway.")
-
+    last_time = utime.ticks_ms()
     while True:
-        updated = gnss.check_buffer()
+        now = utime.ticks_ms()
+        
+        if utime.ticks_diff(now, last_time) >= 1000:
+            last_time = now
+            
+            if gnss.has_fix:
+                pos = gnss.get_position()
 
-        if updated and gnss.has_fix:
-            pos = gnss.get_position()
+                print(
+                    "Lat:", pos["lat"],
+                    "Lon:", pos["lon"],
+                    "Alt:", pos["alt"],
+                )
 
-            print(
-                "Lat:", pos["lat"],
-                "Lon:", pos["lon"],
-                "Alt:", pos["alt"],
-                "HDOP:", pos["hdop"]
-            )
-
-        utime.sleep_ms(
-            MicroGNSSReceiver.MAIN_LOOP_SLEEP_MS
-        )
+        utime.sleep_ms(100)
