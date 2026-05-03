@@ -1,5 +1,5 @@
 """
-File        : rpi_pico2_utils.py
+File        : micro_storage_manager.py
 Description : Unified storage manager for MicroPython environments (Raspberry Pi Pico2 etc).
               Provides mounting/unmounting, file append, log rotation, directory utilities, and
               size management for SD cards on Raspberry Pi Pico or compatible boards.
@@ -8,6 +8,7 @@ MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
               Rev. 0.91  2026-01-04
+              Rev. 0.92  2026-05-03              
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
 """
@@ -25,6 +26,7 @@ class MicroStorageManager:
 
     def __init__(
         self,
+        sd_mounted = False,
         mount_path="/sd",
         log_dir="log",
         filename="temp.log",
@@ -33,6 +35,7 @@ class MicroStorageManager:
         spi_baudrate=25_000_000,
     ):
         """Initialize storage manager with optional SPI configurations."""
+        self.mounted = sd_mounted
         self.mount_path = mount_path
         self.log_dir = log_dir
         self.filename = filename
@@ -43,7 +46,6 @@ class MicroStorageManager:
             {"sck": 18, "mosi": 19, "miso": 16, "cs": 17, "type": "B2"},
         ]
         self.sd = None
-        self.mounted = False
         self._lock = _thread.allocate_lock()
 
     def mount(self) -> bool:
@@ -64,11 +66,11 @@ class MicroStorageManager:
                 self._ensure_dir(self.mount_path)
                 self._ensure_dir(self.log_path)
                 self.mounted = True
-                log_status(f"[STMG] SD mounted: {pins}", LEVEL_INFO)
+                log_status(f"[STMG] SD mounted: {pins}", level=LEVEL_INFO)
                 return True
             except Exception as e:
-                log_status(f"[STMG] SD mount failed {pins}: {e}", LEVEL_WARN)
-        log_status("[STMG] SD mount failed: no valid SPI configuration", LEVEL_ERROR)
+                log_status(f"[STMG] SD mount failed {pins}: {e}", level=LEVEL_WARN)
+        log_status("[STMG] SD mount failed: no valid SPI configuration", level=LEVEL_ERROR)
         return False
 
     def unmount(self) -> bool:
@@ -79,10 +81,10 @@ class MicroStorageManager:
             with self._lock:
                 os.umount(self.mount_path)
                 self.mounted = False
-            log_status("[STMG] SD unmounted", LEVEL_INFO)
+            log_status("[STMG] SD unmounted", level=LEVEL_INFO)
             return True
         except Exception as e:
-            log_status(f"[STMG] SD unmount failed: {e}", LEVEL_ERROR)
+            log_status(f"[STMG] SD unmount failed: {e}", level=LEVEL_ERROR)
             return False
 
     def file_exists(self, path: str) -> bool:
@@ -110,7 +112,7 @@ class MicroStorageManager:
     def append_file(self, path: str, data) -> int:
         """Append data to a file. Returns bytes written."""
         if not self.mounted:
-            log_status("[STMG] append_file: SD not mounted", LEVEL_ERROR)
+            log_status("[STMG] append_file: SD not mounted", level=LEVEL_ERROR)
             return 0
         try:
             with self._lock:
@@ -119,7 +121,7 @@ class MicroStorageManager:
                     written = f.write(data)
             return written if written else 0
         except Exception as e:
-            log_status(f"[STMG] append_file failed {path}: {e}", LEVEL_ERROR)
+            log_status(f"[STMG] append_file failed {path}: {e}", level=LEVEL_ERROR)
             return 0
 
     def rotate(self, new_filename="new.log") -> str | None:
@@ -127,20 +129,20 @@ class MicroStorageManager:
         if not self.mounted:
             return None
         if not self.file_exists(self.temp_file):
-            log_status(f"[STMG] rotate_temp: {self.temp_file} not found", LEVEL_WARN)
+            log_status(f"[STMG] rotate_temp: {self.temp_file} not found", level=LEVEL_WARN)
             return None
         dst = f"{self.log_path}/{new_filename}"
-        log_status(f"[STMG] Renaming {self.temp_file} -> {dst}", LEVEL_DEBUG2)
+        log_status(f"[STMG] Renaming {self.temp_file} -> {dst}", level=LEVEL_DEBUG2)
         try:
             with self._lock:
                 self._ensure_dir(self.log_path)
                 utime.sleep_ms(20)
                 os.rename(self.temp_file, dst)
                 utime.sleep_ms(20)
-            log_status(f"[STMG] Rotated temp file {self.temp_file} -> {dst}", LEVEL_INFO)
+            log_status(f"[STMG] Rotated temp file {self.temp_file} -> {dst}", level=LEVEL_INFO)
             return dst
         except Exception as e:
-            log_status(f"[STMG] rotate_temp failed: {e}", LEVEL_ERROR)
+            log_status(f"[STMG] rotate_temp failed: {e}", level=LEVEL_ERROR)
             return None
 
     def list_dir(self, path=None):
@@ -149,7 +151,7 @@ class MicroStorageManager:
         try:
             return os.listdir(path)
         except Exception as e:
-            log_status(f"[STMG] list_dir failed {path}: {e}", LEVEL_ERROR)
+            log_status(f"[STMG] list_dir failed {path}: {e}", level=LEVEL_ERROR)
             return []
 
     def get_dir_size(self, path: str) -> int:
@@ -162,7 +164,7 @@ class MicroStorageManager:
                 if (st[0] & 0x4000) == 0:  # not a directory
                     total += st[6]
         except Exception as e:
-            log_status(f"get_dir_size failed {path}: {e}", LEVEL_ERROR)
+            log_status(f"[STMG] get_dir_size failed {path}: {e}", level=LEVEL_ERROR)
         return total
 
     def cleanup_dir(self, path: str, max_bytes: int) -> bool:
@@ -170,7 +172,7 @@ class MicroStorageManager:
         size = self.get_dir_size(path)
         if size <= max_bytes:
             return True
-        log_status(f"[STMG] cleanup_dir: size exceeded {size} > {max_bytes}", LEVEL_WARN)
+        log_status(f"[STMG] cleanup_dir: size exceeded {size} > {max_bytes}", level=LEVEL_WARN)
         try:
             with self._lock:
                 for name in os.listdir(path):
@@ -178,10 +180,10 @@ class MicroStorageManager:
                     st = os.stat(full)
                     if (st[0] & 0x4000) == 0:
                         os.remove(full)
-                        log_status(f"Deleted {full}", LEVEL_INFO)
+                        log_status(f"[STMG] Deleted {full}", level=LEVEL_INFO)
             return True
         except Exception as e:
-            log_status(f"cleanup_dir failed: {e}", LEVEL_ERROR)
+            log_status(f"[STMG] cleanup_dir failed: {e}", level=LEVEL_ERROR)
             return False
 
     def _ensure_dir(self, path: str):
@@ -191,7 +193,7 @@ class MicroStorageManager:
         except OSError:
             pass
 
-    def directry(self, path="."):
+    def directory(self, path="."):
         """Print directory listing with size and modification time."""
         if path != "/" and path.endswith("/"):
             path = path.rstrip("/")
@@ -225,53 +227,47 @@ class MicroStorageManager:
 if __name__ == "__main__":
     import utime
 
-    log_status("=== MicroStorageManager TEST START ===", LEVEL_INFO)
+    log_status("=== MicroStorageManager TEST START ===", level=LEVEL_INFO)
 
-    if state.sd_mounted:
+    try:
         os.umount("/sd")
+    except OSError:
+        pass  # not mounted – that's fine
+
     storage = MicroStorageManager()
 
-
-    test_data = (
-        f"/sd/log"
-        f"test_"
-        f"2026.log"
-    )
-
     if not storage.mount():
-        log_status("SD mount failed. Abort test.", LEVEL_ERROR)
+        log_status("SD mount failed. Abort test.", level=LEVEL_ERROR)
     else:
-        
-        storage.directry(path="/sd/log")
-        
-        log_status("Writing temp file...", LEVEL_INFO)
+        storage.directory(path="/sd/log")
+
+        log_status("Writing temp file...", level=LEVEL_INFO)
 
         test_data = b"TEST_DATA_" * 100
 
         for i in range(3):
             written = storage.append_file(storage.temp_file, test_data)
-            log_status(f"Write #{i}: {written} bytes", LEVEL_INFO)
+            log_status(f"Write #{i}: {written} bytes", level=LEVEL_INFO)
             utime.sleep(1)
 
         if storage.file_exists(storage.temp_file):
-            log_status("temp.log exists OK", LEVEL_INFO)
+            log_status("temp.log exists OK", level=LEVEL_INFO)
         else:
-            log_status(f"{storage.temp_file} not found!", LEVEL_ERROR)
+            log_status(f"{storage.temp_file} not found!", level=LEVEL_ERROR)
 
-        log_status("Rotating temp file...", LEVEL_INFO)
+        log_status("Rotating temp file...", level=LEVEL_INFO)
         rotated = storage.rotate("new.log")
 
         if rotated:
-            log_status(f"Rotated file: {rotated}", LEVEL_INFO)
+            log_status(f"Rotated file: {rotated}", level=LEVEL_INFO)
 
         size = storage.get_dir_size(storage.log_path)
-        log_status(f"Log directory size: {size} bytes", LEVEL_INFO)
+        log_status(f"Log directory size: {size} bytes", level=LEVEL_INFO)
 
-        #log_status("Running cleanup_dir (force)...", LEVEL_WARN)
+        #log_status("Running cleanup_dir (force)...", level=LEVEL_WARN)
         #storage.cleanup_dir(storage.log_path, max_bytes=1)
 
         size_after = storage.get_dir_size(storage.log_path)
-        log_status(f"Log directory size after cleanup: {size_after}", LEVEL_INFO)
+        log_status(f"Log directory size after cleanup: {size_after}", level=LEVEL_INFO)
 
         storage.unmount()
-

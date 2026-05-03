@@ -6,7 +6,7 @@ Author      : https://github.com/tkxu/
 MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
-
+              Rev. 0.91  2026-05-03
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
 """
@@ -24,6 +24,7 @@ conversion_factor = 3.3 / 65535
 sd_mounted = False
 safe_mode = False
 board_type = ""
+board_name = ""
 
 
 # Initialize LED and power pins
@@ -35,7 +36,7 @@ power = None
 reset = None
 
 sensor_temp = None  # ADC4 = internal temperature sensor
-vsys_adc = None   # GPIO29 / ADC3 connected to VSYS/3　for reading VSYS voltage
+vsys_adc = None   # GPIO29 / ADC3 connected to VSYS/3 for reading VSYS voltage
 
 
 def read_vsys_voltage():
@@ -60,8 +61,6 @@ def _mount_sd():
         {"sck": 18, "mosi": 19, "miso": 16, "cs": 17, "type": "B2"},
     ]
 
-    sd_mounted = False
-
     for pins in spi_pins_list:
         try:
             spi = SPI(
@@ -81,13 +80,13 @@ def _mount_sd():
 
             sd_mounted = True
             board_type = pins["type"]
-            log_status(f"SD mounted pins={pins}", LEVEL_INFO)
+            log_status(f"SD mounted pins={pins}", level=LEVEL_INFO)
             return
 
         except Exception as e:
-            log_status(f"SD mount failed pins={pins} err={e}", LEVEL_ERROR)
+            log_status(f"SD mount failed pins={pins} err={e}", level=LEVEL_ERROR)
 
-    log_status("SD not mounted, continue without SD", LEVEL_ERROR)
+    log_status("SD not mounted, continue without SD", level=LEVEL_ERROR)
 
 
 def _pinmap_by_board_type(board_type):
@@ -119,7 +118,7 @@ def _print_sd_info():
         log_status("  Free : {:.2f} MB".format(free / 1024 / 1024))
 
     except Exception as e:
-        log_status(f"SD info error: {e}", LEVEL_ERROR)
+        log_status(f"SD info error: {e}", level=LEVEL_ERROR)
 
 
 def init():
@@ -129,11 +128,16 @@ def init():
     global board_name, board_type, sd_mounted
     global led1, led2, led3, led4, power, reset
     global sensor_temp, vsys_adc
-    
+
     log_status("board_rpi_pico2: init")
 
-    # --- SD mount & board_type detection ---
-    _mount_sd()
+
+    try:
+        os.umount("/sd")
+        sd_mounted = False
+    except Exception as e:
+        pass
+    _mount_sd()   
 
     # --- Pin map ---
     pins = _pinmap_by_board_type(board_type)
@@ -166,8 +170,6 @@ def init():
 
 # ================= TEST code =================
 if __name__ == "__main__":
-    from micro_logger import log_status, LEVEL_INFO, LEVEL_ERROR
-    
     log_status("board_rpi_pico2: start")
     init()
 
