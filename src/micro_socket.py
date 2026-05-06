@@ -1,11 +1,12 @@
 """
 File        : micro_socket.py
-Description : 
+Description : Socket abstraction layer that hides modem-specific socket implementations.
 Author      : https://github.com/tkxu/
 MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
               Rev. 0.91  2026-04-19
+              Rev. 0.92  2026-05-06
 
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
@@ -13,7 +14,6 @@ License     : MIT License (see LICENSE file)
 #micro_socket.py
 import utime
 from micro_logger import log_status, LEVEL_DEBUG2, LEVEL_DEBUG, LEVEL_INFO, LEVEL_WARN, LEVEL_ERROR
-from ublox_sara_r import SaraR
 
 class MicroSocket:
     def __init__(self, modem):
@@ -41,19 +41,19 @@ class MicroSocket:
         return sock_num
 
     def send(self, data: bytes) -> int:
-        res = self.modem.socket_send(data)
-        #log_status(f"[SOCK] send body: {res}", LEVEL_INFO)
-        return res
+        if self.sock_num < 0:
+            return -1
+        return self.modem.socket_send(self.sock_num, data)
 
     # receive
     def poll(self):
         if self.sock_num < 0:
-            return False        
-        
+            return False
+
         data = self.modem.socket_recv(self.sock_num, 1024)
         #log_status(f"[SOCK] poll", LEVEL_DEBUG)
         if data:
-            log_status(f"[SOCK] poll = {data.decode()}", LEVEL_DEBUG2)
+            log_status(f"[SOCK] poll = {data[:64]}", LEVEL_DEBUG2)
             self._rx_buffer.extend(data)
             return True
         return False
@@ -61,33 +61,38 @@ class MicroSocket:
     def recv(self, size=1024):
         if not self._rx_buffer:
             return b""
+        
+        # === MicroPython  v1.26.0 safe coding rule ===
+        #MicroPython v1.26 on Pico 2 (RP2350) does not support slice deletion via 'del'. Using slice assignment for compatibility.
+        #e.g. "del self._rx_buffer[size:]"
         data = self._rx_buffer[:size]
-        self._rx_buffer = self._rx_buffer[size:]
+        self._rx_buffer = self._rx_buffer[size:]       
         return data
 
     def available(self) -> int:
         return len(self._rx_buffer)
 
     def clear(self):
-        self._rx_buffer[:] = b""
+        # === MicroPython  v1.26.0 safe coding rule ===
+        self._rx_buffer = bytearray()
 
     def close(self):
         log_status(f"[SOCK] close sock_num={self.sock_num}", LEVEL_INFO)
+
         if self.sock_num >= 0:
             self.modem.socket_close(self.sock_num)
+
         self.sock_num = -1
         self.clear()
 
         # Resetting the SaraR (to prevent socket ID mismatch and residual buffer data)
-        self.modem.sock_num = -1
-        self.modem._rx_buffer = bytearray()
-        self.modem._rx_pending.clear()
+        self.modem.reset_socket_state()
 
         log_status("[SOCK] close complete", LEVEL_INFO)
 
 # TEST CODE
 if __name__ == "__main__":
-    import utime, os
+    import os
     from ublox_sara_r import SaraR
     from micro_logger import log_status, LEVEL_INFO
 
@@ -102,9 +107,8 @@ if __name__ == "__main__":
         if result is True:
             log_status("Soracom Connect!")
             break
-        elif result is None:
-            log_status("Connection failed")
-            raise SystemExit
+        elif result is False:
+            raise SystemExit("LTE connect failed")
         utime.sleep_ms(1000)
 
     # --- test payload ---
@@ -165,7 +169,7 @@ if __name__ == "__main__":
 
         utime.sleep_ms(20)
 
-    log_status(f"[TEST] response: {bytes(response)}", LEVEL_INFO)
+    #log_status(f"[TEST] response: {bytes(response)}", LEVEL_INFO)
 
     if response.startswith(b"HTTP/1.1 200") or response.startswith(b"HTTP/1.1 201"):
         log_status("[TEST] HTTP OK", LEVEL_INFO)

@@ -2,20 +2,22 @@
 File        : micro_modem.py
 Description : MicroPython modem interface class.
               Provides AT command handling, retries, synchronous and asynchronous response parsing,
-              basic info queries (IMEI, IMSI, CSQ), abstract socket API, and URC handling.
+              basic info queries (IMEI, IMSI, CSQ, CCLK), abstract socket API, and URC handling.
               Designed for Raspberry Pi Pico2 or similar boards.
 Author      : https://github.com/tkxu/
 MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
-              Rev. 0.91  2026-01-04
+              Rev. 0.92  2026-01-17
+              Rev. 0.93  2026-05-06              
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
 """
 #micro_modem.py
 import utime
 from machine import UART, Pin
-from micro_logger import log_status, debug_level, LEVEL_DEBUG3, LEVEL_DEBUG2, LEVEL_DEBUG, LEVEL_INFO, LEVEL_WARN, LEVEL_ERROR
+import micro_logger
+from micro_logger import log_status, LEVEL_DEBUG3, LEVEL_DEBUG2, LEVEL_DEBUG, LEVEL_INFO, LEVEL_WARN, LEVEL_ERROR
 
 
 class MicroModem:
@@ -32,18 +34,23 @@ class MicroModem:
         self.last_response = b""
         self.rxdata = b""
         if debug:
-            debug_level = LEVEL_DEBUG
+            self.log_level = LEVEL_DEBUG2
         else:
-            debug_level = LEVEL_INFO
-        
+            self.log_level = LEVEL_INFO
+
         # Basic modem information
         self.modem_model = "Generic"
 
-        # Initialize IMSI/IMEI/RSSI to None
         self.imsi = None
         self.imei = None
-        self.rssi = None
+        self.rssi = -1
 
+    # === log ===
+    def _log(self, msg, level=LEVEL_INFO):
+        if level >= self.log_level:
+            log_status(msg, level)
+
+    # === uart ===
     def _write(self, data: bytes):
         """Send bytes to the modem via UART.(easy to override in subclasses)"""
         self.uart.write(data)
@@ -63,7 +70,7 @@ class MicroModem:
         """Send an AT command and wait for response."""
         cmd_bytes = cmd.encode() if isinstance(cmd, str) else cmd
         self._write(cmd_bytes + b"\r\n")
-        log_status(f"[SEND] {cmd_bytes.decode()}", level=LEVEL_DEBUG3)
+        self._log(f"[SEND] {cmd_bytes.decode()}", level=LEVEL_DEBUG3)
 
         if async_mode:
             return True
@@ -77,16 +84,16 @@ class MicroModem:
             )
 
             if prompt_resp is None:
-                log_status("[PROMPT] Timeout waiting prompt", level=LEVEL_WARN)
+                self._log("[PROMPT] Timeout waiting prompt", level=LEVEL_WARN)
                 return None if return_raw else False
 
-            log_status(f"[PROMPT DETECTED] {prompt_resp}", level=LEVEL_DEBUG2)
+            self._log(f"[PROMPT DETECTED] {prompt_resp}", level=LEVEL_DEBUG3)
 
             if data_after_prompt is None:
                 return prompt_resp if return_raw else True
 
             self._write(data_after_prompt)
-            log_status(f"[SEND-DATA] {len(data_after_prompt)} bytes", level=LEVEL_DEBUG3)
+            self._log(f"[SEND-DATA] {len(data_after_prompt)} bytes", level=LEVEL_DEBUG3)
 
         # Wait for OK
         final_resp = self.wait_response(
@@ -95,7 +102,7 @@ class MicroModem:
             return_full=True
         )
         
-        log_status(f"[RECV] {final_resp}", level=LEVEL_DEBUG2)
+        self._log(f"[RECV] {final_resp}", level=LEVEL_DEBUG3)
 
         if final_resp is None or b"ERROR" in final_resp:
             return final_resp if return_raw else False
@@ -163,11 +170,11 @@ class MicroModem:
             self.last_response = st["buffer"]
             self._wait_state = None
             
-            log_status(f"[RECV] {self.last_response}", level=LEVEL_DEBUG)
+            self._log(f"[RECV] {self.last_response}", level=LEVEL_DEBUG3)
             return True
 
         # Timeout
-        if utime.ticks_diff(now, st["start"]) > st["timeout"]:
+        if utime.ticks_diff(utime.ticks_ms(), st["start"]) > st["timeout"]:
             self.last_response = st["buffer"]
             self._wait_state = None
             return None
@@ -190,7 +197,7 @@ class MicroModem:
                         return s
                     if "SIM failure" in s:
                         self.imsi = "SIM_FAIL"
-                        log_status("SIM failure detected", level=LEVEL_WARN)
+                        self._log("SIM failure detected", level=LEVEL_WARN)
                         return self.imsi
 
             utime.sleep_ms(delay_ms)
@@ -226,8 +233,45 @@ class MicroModem:
                     rssi = line.split(":")[1].strip().split(",")[0]
                     self.rssi = int(rssi)
                     return True
-        except:
+        except Exception:
             return False
+
+        return False  # +CSQ: line not found
+
+
+    def get_time(self):
+
+        if not self.send_at(b'AT+CCLK?', timeout=3000):
+            log_status("[MODM] get_time read failed", level=LEVEL_ERROR)
+
+            return None
+
+        for line in self.last_response.split(b"\r\n"):
+            # NOTE: MicroPython 1.26.0 decode() has no errors= keyword support
+            # using errors="ignore" causes TypeError → intentionally not used
+            s = line.decode().strip()
+
+            if not s.startswith("+CCLK:"):
+                continue
+
+            start = s.find('"')
+            end = s.find('"', start + 1)
+            if start < 0 or end < 0:
+                continue
+
+            cclk = s[start + 1:end]
+            date_part, time_part = cclk.split(",")
+
+            year_short, month, day = map(int, date_part.split("/"))
+            time_part = time_part.split("+")[0]
+            hour, minute, second = map(int, time_part.split(":"))
+
+            full_year = 2000 + year_short
+
+            return (full_year, month, day, hour, minute, second)
+
+        log_status("[MODM] get_time failed: +CCLK not found", level=LEVEL_WARN)
+        return None
 
 # --- Socket API (abstract) ---
     def socket_create(self) -> int:
@@ -236,7 +280,7 @@ class MicroModem:
     def socket_connect(self, sock: int, host: str, port: int) -> bool:
         raise NotImplementedError
 
-    def socket_send(self, sock: int, data: bytes) -> bool:
+    def socket_send(self, sock: int, data: bytes) -> int:
         raise NotImplementedError
 
     def socket_recv(self, sock: int, size: int = 1024) -> bytes:
@@ -257,9 +301,18 @@ class MicroModem:
     def socket_close(self, sock: int) -> None:
         raise NotImplementedError
 
+    def reset_socket_state(self) -> None:
+        """
+        Reset vendor-specific socket state after closing.
+        Subclasses should override this to clear internal socket ID,
+        RX buffer, and pending data (e.g. sock_num, _rx_buffer, _rx_pending).
+        Called by MicroSocket.close() to avoid direct access to internal fields.
+        """
+        pass
+
     def detected_model(self) -> bool:
         if not self.send_at(b'ATI', timeout=20000):
-            log_status("Failed to detect Model", level=LEVEL_ERROR)
+            self._log("Failed to detect Model", level=LEVEL_ERROR)
             return False
 
         return True
@@ -273,8 +326,9 @@ class MicroModem:
     
 # TEST code
 if __name__ == "__main__":
-    from machine import UART, Pin, SPI, I2C, RTC, Timer
+    from machine import UART, Pin
 
+    log_status("=== micro_modem.py TEST START ===")
     # Initialize UART
     modem = MicroModem(debug=True)
     modem.send_at_retry(b'AT', retries=3)
@@ -282,3 +336,4 @@ if __name__ == "__main__":
     modem.get_imsi()
     modem.get_imei()
     modem.get_signal_strength()
+    modem.get_time()

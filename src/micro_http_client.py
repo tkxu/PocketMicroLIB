@@ -8,6 +8,7 @@ MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
               Rev. 0.91  2026-04-19
+              Rev. 0.92  2026-05-06              
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
 """
@@ -65,18 +66,20 @@ class MicroHttpClient:
         """
         Send HTTP request + header.
         Body must be sent by caller via MicroSocket.send().
+        Injects Host header automatically if missing.
         """
-        
+
         if not header:
             log_status("MicroHttpClient: header is empty", LEVEL_ERROR)
             return False
-        
-        # --- create request---
-        data = f"{method} {path}"+" HTTP/1.1\r\n" + header
 
-        if isinstance(data, str):
-            data = data.encode()
-        
+        # --- Guarantee Host header (HTTP/1.1 requirement) ---
+        if self.host and "Host:" not in header:
+            header = f"Host: {self.host}\r\n" + header
+
+        # --- create request---
+        data = (f"{method} {path}" + " HTTP/1.1\r\n" + header).encode()
+
         sent = self.sock.send(data)
         if sent != len(data):
             log_status("MicroHttpClient: header send failed", LEVEL_ERROR)
@@ -91,19 +94,19 @@ class MicroHttpClient:
         """
         body = ujson.dumps(json_body).encode()
 
-        sock = self.connect(host, port)
-        if sock < 0:
+        if self.connect(host, port) < 0:
             return False
 
-        headers = {
-            "Host": host,
-            "Content-Type": "application/json",
-            "Content-Length": str(len(body)),
-            "Connection": "close",
-        }
+        header = (
+            f"Host: {host}\r\n"
+            "Content-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+        )
 
-        if not self.send_headers(sock, "POST", path, headers):
-            self.close(sock)
+        if not self.send_header(method="POST", path=path, header=header):
+            self.close()
             return False
 
         sent = self.send_body(body)
@@ -112,10 +115,31 @@ class MicroHttpClient:
             self.close()
             return False
 
+        resp = self.read_response()
         self.close()
-        return True
+        return resp.startswith(b"HTTP/1.1 2")
 
+    def read_response(self, timeout_ms: int = 10000) -> bytes:
+        self._response_buffer = bytearray()
+        start = utime.ticks_ms()
+        last_recv = start
 
+        while utime.ticks_diff(utime.ticks_ms(), start) < timeout_ms:
+
+            self.sock.modem.poll_urc()
+            self.sock.poll()
+            data = self.sock.recv()
+
+            if data:
+                self._response_buffer.extend(data)
+                last_recv = utime.ticks_ms()
+            else:
+                if utime.ticks_diff(utime.ticks_ms(), last_recv) > 3000:
+                    break
+
+            utime.sleep_ms(20)
+
+        return bytes(self._response_buffer)
 
     def close(self):
         """
@@ -169,8 +193,8 @@ if __name__ == "__main__":
     )
 
     # --- send headers only ---
-    http.send_header( method, path, header)
-
+    if not http.send_header( method, path, header):
+        raise SystemExit("Send HTTP Header failed")
 
     # --- send body  ---
     with open(file_path, "rb") as f:
@@ -183,5 +207,10 @@ if __name__ == "__main__":
                 raise SystemExit("send_body failed")
             utime.sleep_ms(50)
 
-    http.close()
+    # --- receive response ---
+    utime.sleep_ms(1000)
+    resp = http.read_response(timeout_ms=10000)
+    if resp:
+        print(resp.decode())
+
     modem.disconnect()

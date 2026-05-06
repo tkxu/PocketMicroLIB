@@ -7,13 +7,14 @@ MicroPython : v1.26
 Board       : Raspberry Pi Pico2
 Version     : Rev. 0.90  2026-01-01
               Rev. 0.91  2026-04-19
+              Rev. 0.92  2026-05-06
 Copyright 2026 tkxu
 License     : MIT License (see LICENSE file)
 """
 # soracom_harvest_files.py
 import os
 import utime
-from micro_logger import log_status, LEVEL_DEBUG2, LEVEL_DEBUG, LEVEL_INFO, LEVEL_WARN, LEVEL_ERROR
+from micro_logger import log_status, LEVEL_DEBUG3, LEVEL_DEBUG2, LEVEL_DEBUG, LEVEL_INFO, LEVEL_WARN, LEVEL_ERROR
 
 
 class SoracomHarvestFiles:
@@ -46,7 +47,7 @@ class SoracomHarvestFiles:
         self.file = None
         self.filesize = 0
 
-        self.buf = b""
+        self.buf = bytearray()
         self.buf_offset = 0
         self.sent_bytes = 0
 
@@ -54,8 +55,8 @@ class SoracomHarvestFiles:
         self.header_retry = 0
         self.next_time = 0
 
-        self.closing_start = 0
-        self.last_response = b""
+        self.closing_start_ms = 0
+        self.last_response = bytearray()
 
     # Public API
 
@@ -105,13 +106,17 @@ class SoracomHarvestFiles:
         """Return True while an upload is in progress."""
         return self.state != self.HF_IDLE
 
+    def get_state(self) -> int:
+        """Return the current state value."""
+        return self.state
+
     def get_progress_bytes(self):
         """Return (sent_bytes, filesize) for progress monitoring."""
         return self.sent_bytes, self.filesize
 
     # Main tick  (call this repeatedly from the main loop)
     def tick(self):
-        now = utime.time()
+        now = utime.ticks_ms()
 
         if self.state == self.HF_IDLE:
             return
@@ -120,7 +125,7 @@ class SoracomHarvestFiles:
             log_status("[SORA] PREPARE start", LEVEL_DEBUG)
 
             # Close any previously open file handle
-            if getattr(self, "file", None):
+            if self.file:
                 try:
                     self.file.close()
                 except Exception as e:
@@ -136,8 +141,8 @@ class SoracomHarvestFiles:
 
                     if self.filesize <= 0:
                         log_status("[SORA] file size is zero", LEVEL_WARN)
-                        self.closing_start = 0
-                        self.last_response = b""
+                        self.closing_start_ms = 0
+                        self.last_response = bytearray()
                         self.state = self.HF_DONE
                         return
 
@@ -152,13 +157,13 @@ class SoracomHarvestFiles:
 
             log_status("[SORA] PREPARE failed after retries", LEVEL_ERROR)
             self.state = self.HF_WAIT
-            self.next_time = now + 60
+            self.next_time = now + 60_000
 
         elif self.state == self.HF_OPEN:
             log_status("[SORA] OPEN sending headers", LEVEL_DEBUG)
 
             if self._post():
-                self.buf = b""
+                self.buf = bytearray()
                 self.buf_offset = 0
                 self.sent_bytes = 0
                 self.retry = 0
@@ -171,7 +176,7 @@ class SoracomHarvestFiles:
                     self.state = self.HF_ABORT
                 else:
                     self.state = self.HF_WAIT
-                    self.next_time = now + 3
+                    self.next_time = now + 3000
 
         elif self.state == self.HF_SENDING:
             if not self.buf:
@@ -183,8 +188,8 @@ class SoracomHarvestFiles:
                         f"[SORA] Upload finished {self.sent_bytes}/{self.filesize}",
                         LEVEL_INFO,
                     )
-                    self.closing_start = 0   # Reset before entering HF_CLOSING
-                    self.last_response = b""
+                    self.closing_start_ms = 0   # Reset before entering HF_CLOSING
+                    self.last_response = bytearray()
                     self.state = self.HF_CLOSING
                     return
 
@@ -194,10 +199,10 @@ class SoracomHarvestFiles:
                 self.buf_offset += sent
                 self.sent_bytes += sent
                 self.retry = 0
-                log_status(f"[SORA] SEND {self.sent_bytes}/{self.filesize}", LEVEL_DEBUG2)
+                log_status(f"[SORA] SEND {self.sent_bytes}/{self.filesize}", LEVEL_DEBUG3)
 
                 if self.buf_offset >= len(self.buf):
-                    self.buf = b""
+                    self.buf = bytearray()
                     self.buf_offset = 0
             else:
                 self.retry += 1
@@ -207,8 +212,8 @@ class SoracomHarvestFiles:
 
         elif self.state == self.HF_CLOSING:
             # First tick: start the idle timer
-            if self.closing_start == 0:
-                self.closing_start = utime.ticks_ms()
+            if self.closing_start_ms == 0:
+                self.closing_start_ms = utime.ticks_ms()
                 return
 
             # Poll URC to trigger _rx_pending, then read available data
@@ -218,11 +223,11 @@ class SoracomHarvestFiles:
 
             if data:
                 self.last_response += data
-                self.closing_start = utime.ticks_ms()  # Reset idle timer on data
+                self.closing_start_ms = utime.ticks_ms()  # Reset idle timer on data
                 return
 
-            # Proceed to HF_DONE after 1500 ms of no new data
-            if utime.ticks_diff(utime.ticks_ms(), self.closing_start) < 1500:
+            # Proceed to HF_DONE after 2000 ms of no new data
+            if utime.ticks_diff(utime.ticks_ms(), self.closing_start_ms) < 2000:
                 return
 
             self.state = self.HF_DONE
@@ -251,8 +256,8 @@ class SoracomHarvestFiles:
                     LEVEL_WARN,
                 )
 
-            self.closing_start = 0
-            self.last_response = b""
+            self.closing_start_ms = 0
+            self.last_response = bytearray()
             self.state         = self.HF_IDLE
 
         elif self.state == self.HF_ABORT:
@@ -277,15 +282,15 @@ class SoracomHarvestFiles:
             self.retry        = 0
             self.header_retry = 0
             self.state        = self.HF_WAIT
-            self.next_time    = now + 300
+            self.next_time    = now + 300_000
 
         elif self.state == self.HF_WAIT:
             if now >= self.next_time:
+                self.header_retry = 0
                 log_status("[SORA] WAIT done -> PREPARE", LEVEL_DEBUG)
                 self.state = self.HF_PREPARE
 
     # Internal helpers
-
     def _send_chunk(self, data: bytes) -> int:
         """Send a chunk of body data. Returns bytes sent, or 0 on error."""
         try:
@@ -294,10 +299,9 @@ class SoracomHarvestFiles:
             log_status(f"[SORA] send chunk error: {e}", LEVEL_WARN)
             return 0
 
-    # Internal helpers
     def _post(self, path="/") -> bool:
-        sock = self.http.connect(self.HOST, self.PORT)
-        if sock < 0:
+
+        if self.http.connect(self.HOST, self.PORT) < 0:
             return False
 
         header = (
@@ -330,14 +334,13 @@ if __name__ == "__main__":
     from micro_socket import MicroSocket
     from ublox_sara_r import SaraR
     from micro_http_client import MicroHttpClient
-    from soracom_harvest_files import SoracomHarvestFiles
     from micro_logger import log_status, LEVEL_INFO, LEVEL_ERROR
 
     log_status("soracom_harvest_files.py: start")
     
-    modem = SaraR(debug=True)
-    modem.connect('soracom.io', 'sora', 'sora', 1)
-
+    #modem = SaraR(debug=True)
+    modem = SaraR(debug=False)
+    
     # Socket / HTTP / HarvestFiles
     socket = MicroSocket(modem)
     http_client = MicroHttpClient(socket)
@@ -354,6 +357,11 @@ if __name__ == "__main__":
         log_status(f"File create failed: {e}", LEVEL_ERROR)
         raise SystemExit
 
+
+    if not modem.connect('soracom.io', 'sora', 'sora', 1):
+        log_status("SoracomHarvestFiles Modem connect  failed", LEVEL_ERROR)
+        raise SystemExit
+    
     # Start upload
     if not harvest.start(test_filename):
         log_status("SoracomHarvestFiles start failed", LEVEL_ERROR)
@@ -362,22 +370,22 @@ if __name__ == "__main__":
     log_status("SoracomHarvestFiles upload started", LEVEL_INFO)
 
     # Tick loop
-    start_time = utime.time()
-    TIMEOUT_SEC = 60  # 1 minutes
+    start_time = utime.ticks_ms()
+    TIMEOUT_MS = 60_000  # 1 minutes
 
     while True:
         harvest.tick()
         utime.sleep_ms(100)
 
-        if harvest.state == harvest.HF_IDLE:
+        if not harvest.is_busy():
             log_status("SoracomHarvestFiles upload finished", LEVEL_INFO)
             break
 
-        if harvest.state == harvest.HF_WAIT:
+        if harvest.get_state() == harvest.HF_WAIT:
             log_status("SoracomHarvestFiles upload failed (WAIT)", LEVEL_ERROR)
             break
 
-        if utime.time() - start_time > TIMEOUT_SEC:
+        if utime.ticks_diff(utime.ticks_ms(), start_time) > TIMEOUT_MS:
             log_status("SoracomHarvestFiles upload timeout", LEVEL_ERROR)
             harvest.close()
             break
